@@ -1,3 +1,5 @@
+import gc
+
 import torch
 from prune import prune
 from utils.utils import set_params, get_params,train,inst_model_info
@@ -8,19 +10,41 @@ from utils.dataset import (
 from utils.lora import *
 from utils.simple_quant import *
 
+
+def cleanup_memory():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _resolve_device(device_hint):
+    """Return a valid torch.device using the provided hint."""
+    if isinstance(device_hint, torch.device):
+        candidate = device_hint
+    else:
+        try:
+            candidate = torch.device(device_hint)
+        except (TypeError, RuntimeError):
+            candidate = torch.device("cpu")
+
+    if candidate.type == "cuda" and not torch.cuda.is_available():
+        return torch.device("cpu")
+    return candidate
+
+
 def mp_fit(info, fl_info,config, parameters, return_dict):
     
     use_prune = fl_info.prune
     use_prune_srv = fl_info.prune_srv
-    device = fl_info.device
+    device = _resolve_device(fl_info.device if hasattr(fl_info, "device") else "cpu")
     fed_dir = fl_info.fed_dir
     cid = fl_info.cid
-    
+
     net = inst_model_info(info)
     if fl_info.lora_config is not None :
         net = inject_low_rank(net,fl_info.lora_config)
 
-    if fl_info.apply_quant: 
+    if fl_info.apply_quant:
         fakequant_trainable_channel(net,fl_info.quant_bits)
 
     if parameters is not None:
@@ -43,7 +67,7 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
         transform=dict_tranforms_train[info.dataset_name],
     )
 
-    criterion = torch.nn.CrossEntropyLoss().cuda()
+    criterion = torch.nn.CrossEntropyLoss().to(device)
 
     params = [
         {
@@ -78,6 +102,9 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
     if use_prune:
         params = prune(params,config["prate"])
 
-    # net.to(torch.device("cpu"))
+    net.to(torch.device("cpu"))
     return_dict["params"] = params
     return_dict["size"] = len(trainloader.dataset)
+
+    del net, trainloader, optimizer, criterion
+    cleanup_memory()
