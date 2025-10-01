@@ -6,6 +6,12 @@ from utils.dcs import *
 from models.projector import Project
 import math
 from functools import reduce
+from typing import Dict, Optional, Sequence, Tuple
+
+from args import args
+
+if args.wandb:
+    import wandb
 
 SCALING_FACTOR = 1.2
 
@@ -89,24 +95,121 @@ def pile_str(line, item):
     return "_".join([line, item])
 
 
-def tell_history(hist, file_name, infos=None, path=""):
-    _, acc_cent = zip(*hist.metrics_centralized["accuracy"])
+def _extract_metric_values(
+    metric_entries: Optional[Sequence[Tuple[int, float]]]
+) -> np.ndarray:
+    if not metric_entries:
+        return np.array([], dtype=float)
+    rounds, values = zip(*metric_entries)
+    return np.asarray(values, dtype=float)
+
+
+def _summarize_series(series: np.ndarray) -> Dict[str, float]:
+    if series.size == 0:
+        return {}
+    series_mean = float(np.mean(series))
+    series_std = float(np.std(series))
+    return {
+        "mean": series_mean,
+        "std": series_std,
+        "lowest": float(series_mean - series_std),
+        "highest": float(series_mean + series_std),
+    }
+
+
+def tell_history(
+    hist,
+    file_name,
+    infos=None,
+    path="",
+    report_metadata: Optional[Dict[str, float]] = None,
+):
+    accuracy_centralized = hist.metrics_centralized.get("accuracy", [])
+    acc_cent_values = _extract_metric_values(accuracy_centralized)
     losses_cent = hist.losses_centralized
     losses_dis = hist.losses_distributed
+
     try:
-        acc_dis = hist.metrics_distributed["dist_acc"]
-    except:
-        acc_dis = 0.0
+        acc_distributed = hist.metrics_distributed["dist_acc"]
+    except KeyError:
+        acc_distributed = []
 
-    acc_cent = np.asarray(acc_cent, dtype=object)
+    acc_dis_values = _extract_metric_values(acc_distributed)
+    losses_dis_values = _extract_metric_values(losses_dis)
 
-    infos["accuracy_cent"] = acc_cent
-    infos["accuracy_dist"] = acc_dis
+    if infos is None:
+        infos = {}
+
+    infos["accuracy_cent"] = acc_cent_values
+    infos["accuracy_dist"] = acc_distributed
     infos["losses_cent"] = losses_cent
     infos["losses_dis"] = losses_dis
 
+    report: Dict[str, float] = {}
+
+    training_summary = _summarize_series(losses_dis_values)
+    if training_summary:
+        report.update(
+            {
+                "training_loss_mean": training_summary["mean"],
+                "training_loss_std": training_summary["std"],
+                "training_loss_lowest": training_summary["lowest"],
+                "training_loss_highest": training_summary["highest"],
+            }
+        )
+
+    client_acc_summary = _summarize_series(acc_dis_values)
+    if client_acc_summary:
+        report.update(
+            {
+                "acc_clients_mean": client_acc_summary["mean"],
+                "acc_clients_std": client_acc_summary["std"],
+                "acc_clients_lowest": client_acc_summary["lowest"],
+                "acc_clients_highest": client_acc_summary["highest"],
+            }
+        )
+
+    server_acc_summary = _summarize_series(acc_cent_values)
+    if server_acc_summary:
+        report.update(
+            {
+                "acc_servers_mean": server_acc_summary["mean"],
+                "acc_servers_std": server_acc_summary["std"],
+                "acc_servers_lowest": server_acc_summary["lowest"],
+                "acc_servers_highest": server_acc_summary["highest"],
+            }
+        )
+
+    if report_metadata is not None:
+        model_size_bytes = report_metadata.get("model_size_bytes", 0.0) or 0.0
+        clients_per_round = report_metadata.get("clients_per_round", 0.0) or 0.0
+        num_rounds = report_metadata.get("num_rounds", 0.0) or 0.0
+
+        if model_size_bytes > 0 and clients_per_round > 0 and num_rounds > 0:
+            upload_traffic_round = model_size_bytes * clients_per_round
+            download_traffic_round = model_size_bytes * clients_per_round
+            total_upload_traffic = upload_traffic_round * num_rounds
+            total_download_traffic = download_traffic_round * num_rounds
+
+            report.update(
+                {
+                    "upload_traffic": upload_traffic_round,
+                    "download_traffic": download_traffic_round,
+                    "upload_traffic_per_client": model_size_bytes,
+                    "overall_traffic": total_upload_traffic + total_download_traffic,
+                    "total_upload_traffic": total_upload_traffic,
+                    "total_download_traffic": total_download_traffic,
+                }
+            )
+
+    if report:
+        infos["report"] = report
+
     with open(path + file_name + ".npy", "wb") as f:
         np.save(f, infos)
+
+    if args.wandb and report:
+        wandb.log(report)
 
 
 def inst_model_info(model_info: Info, use_proj: bool = False, out_dim: int = -1):
