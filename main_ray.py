@@ -14,7 +14,7 @@ from utils.dataset import import_dataset, do_fl_partitioning
 from utils.utils import *
 from utils.file_name import gen_filename
 from utils.server import *
-from args import args
+from args import parse_args
 from log import logger, HFILE
 from utils.strats import Evaluate,get_model_size,EvaluateLora
 from utils.simple_quant import original_msg_size,quant_msg_size
@@ -64,6 +64,7 @@ def build_server_info(test_set,knn_set=None):
 
 if __name__ == "__main__":
     saddr = "0.0.0.0:8080"
+    args = parse_args()
     processes = []
 
     pool_size = args.num_clients
