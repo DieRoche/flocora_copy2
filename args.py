@@ -52,7 +52,7 @@ parser.add_argument("--checkpoint", action="store_true",help="secretly bad")
 parser.add_argument("--seed", type=int,default=5,help="reduction for the learning rate")
 parser.add_argument("--freq_checkpoint", type=int,default=9999999,help="reduction for the learning rate")
 parser.add_argument("--nworkers", type=int,default=1,help="num workers dataloader")
-parser.add_argument("--ray_gpu", type=float, default=0.3,help="ray argument for num_gpus")
+parser.add_argument("--ray_gpu", type=float, default=0.5,help="ray argument for num_gpus")
 
 ##Lora
 parser.add_argument("--lora_alpha", type=int,default=16,help="alpha parameter in a lora adapter")
@@ -72,9 +72,9 @@ parser.add_argument("--apply_quant", action="store_true",help="to enable fakequa
 parser.add_argument("--quant_bits", type=int,default=8,help="number of bits for fakequant")
 
 ## Wandb
-parser.add_argument("--wandb", action="store_true",help="to used wandb")
-parser.add_argument("--entity", type=str,help="wandb entity name")
-parser.add_argument("--wandb_prj_name", type=str,help="compression_FL")
+parser.add_argument("--wandb", action="store_true",default=True,help="to used wandb")
+parser.add_argument("--entity", type=str,default="dracoflow-upe",help="wandb entity name")
+parser.add_argument("--wandb_prj_name", type=str,default="compression_FL",help="compression_FL")
 
 ##FedProx
 parser.add_argument("--mu", type=float,default=0.01,help="fedprox proximal factor")
