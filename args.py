@@ -94,18 +94,19 @@ def create_parser():
     parser.add_argument("--mu", type=float,default=0.01,help="fedprox proximal factor")
     return parser
 
-def _postprocess_args(parsed_args: argparse.Namespace) -> argparse.Namespace   :
-    Path(args.path_results).mkdir(parents=True,exist_ok=True)
+def _postprocess_args(parsed_args: argparse.Namespace) -> argparse.Namespace:
+    Path(parsed_args.path_results).mkdir(parents=True, exist_ok=True)
 
-    if(args.fedbn):
-        args.batchn = args.fedbn # if fedbn, force batchnorm use
+    if parsed_args.fedbn:
+        parsed_args.batchn = parsed_args.fedbn  # if fedbn, force batchnorm use
 
-    if(args.milestones != 0 and len(args.milestones)==1):
-        args.milestones = np.arange(2,
-            args.num_rounds + 1, args.milestones[0]).tolist()
+    if parsed_args.milestones != 0 and len(parsed_args.milestones) == 1:
+        parsed_args.milestones = np.arange(
+            2, parsed_args.num_rounds + 1, parsed_args.milestones[0]
+        ).tolist()
 
-    if(args.path_results[-1]!="/"):
-        args.path_results+="/"
+    if parsed_args.path_results[-1] != "/":
+        parsed_args.path_results += "/"
     # post process args if needed
     return parsed_args
 
@@ -113,7 +114,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = create_parser()
     args = parser.parse_args(argv)
     return _postprocess_args(args)
-    
+
 
 
 # parse input arguments
+args = parse_args()
