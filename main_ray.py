@@ -125,6 +125,8 @@ if __name__ == "__main__":
         "fedbn": args.fedbn,
     }
 
+    clients_per_round = max(kwargs_dict["min_fit_clients"], 0)
+
     device = torch_device("cuda" if torch.cuda.is_available() else "cpu")
     strategy = None
     lora_config = None
@@ -285,6 +287,17 @@ if __name__ == "__main__":
         strategy=strategy,
         ray_init_args=ray_init_args,
     )
-    tell_history(hist, file_name, infos=args_dict, path=args.path_results)
+    report_metadata = {
+        "model_size_bytes": model_size if model_size > 0 else 0.0,
+        "clients_per_round": float(clients_per_round),
+        "num_rounds": float(args.num_rounds),
+    }
+    tell_history(
+        hist,
+        file_name,
+        infos=args_dict,
+        path=args.path_results,
+        report_metadata=report_metadata,
+    )
 
     logger.info("The End")
