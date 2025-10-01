@@ -1,3 +1,6 @@
+import multiprocessing
+
+import torch
 import torch.multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
@@ -260,9 +263,14 @@ if __name__ == "__main__":
 
     # (optional) specify Ray config
     ray_init_args = {"include_dashboard": False}
+    total_cpus = max(1, multiprocessing.cpu_count())
+    total_gpus = 0
+    if not args.only_cpu and torch.cuda.is_available():
+        total_gpus = torch.cuda.device_count()
+
     client_resources = {
-        "num_cpus": 1,
-        "num_gpus": args.ray_gpu
+        "num_cpus": float(total_cpus),
+        "num_gpus": float(total_gpus),
     }
 
     if(args.wandb):
