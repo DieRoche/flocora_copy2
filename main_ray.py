@@ -264,14 +264,28 @@ if __name__ == "__main__":
     # (optional) specify Ray config
     ray_init_args = {"include_dashboard": False}
     total_cpus = max(1, multiprocessing.cpu_count())
-    total_gpus = 0
-    if not args.only_cpu and torch.cuda.is_available():
-        total_gpus = torch.cuda.device_count()
+    per_client_cpus = max(0.0, float(args.ray_cpu))
+    if per_client_cpus == 0.0:
+        logger.warning(
+            "Per-client CPU allocation was resolved to 0. Ray requires a positive value; "
+            "falling back to reserving 1 CPU per client."
+        )
+        per_client_cpus = 1.0
+    per_client_cpus = min(per_client_cpus, float(total_cpus))
+    visible_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
 
-    client_resources = {
-        "num_cpus": float(total_cpus),
-        "num_gpus": float(total_gpus),
-    }
+    if args.only_cpu or visible_gpus == 0:
+        per_client_gpus = 0.0
+    else:
+        if args.ray_gpu is None:
+            per_client_gpus = float(visible_gpus)
+        else:
+            per_client_gpus = max(0.0, float(args.ray_gpu))
+        per_client_gpus = min(per_client_gpus, float(visible_gpus))
+
+    client_resources = {"num_cpus": per_client_cpus, "num_gpus": per_client_gpus}
+
+    logger.debug(f"Client resources resolved to: {client_resources}")
 
     if(args.wandb):
         wandb.init(

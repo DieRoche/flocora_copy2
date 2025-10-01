@@ -52,7 +52,18 @@ parser.add_argument("--checkpoint", action="store_true",help="secretly bad")
 parser.add_argument("--seed", type=int,default=5,help="reduction for the learning rate")
 parser.add_argument("--freq_checkpoint", type=int,default=9999999,help="reduction for the learning rate")
 parser.add_argument("--nworkers", type=int,default=1,help="num workers dataloader")
-parser.add_argument("--ray_gpu", type=float, default=0.5,help="ray argument for num_gpus")
+parser.add_argument(
+    "--ray_gpu",
+    type=float,
+    default=None,
+    help="Per-client GPU fraction requested from Ray; omit or set to 0 to disable GPU usage",
+)
+parser.add_argument(
+    "--ray_cpu",
+    type=float,
+    default=5.0,
+    help="Number of CPUs each Ray client reserves during simulation",
+)
 
 ##Lora
 parser.add_argument("--lora_alpha", type=int,default=16,help="alpha parameter in a lora adapter")
