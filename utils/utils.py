@@ -188,17 +188,49 @@ def tell_history(
             download_traffic_round = model_size_bytes * clients_per_round
             total_upload_traffic = upload_traffic_round * num_rounds
             total_download_traffic = download_traffic_round * num_rounds
+            overall_traffic = total_upload_traffic + total_download_traffic
 
-            report.update(
-                {
-                    "upload_traffic": upload_traffic_round,
-                    "download_traffic": download_traffic_round,
-                    "upload_traffic_per_client": model_size_bytes,
-                    "overall_traffic": total_upload_traffic + total_download_traffic,
-                    "total_upload_traffic": total_upload_traffic,
-                    "total_download_traffic": total_download_traffic,
-                }
+            communication_steps = report_metadata.get(
+                "communication_steps_per_round"
             )
+            try:
+                communication_steps = float(communication_steps)
+            except (TypeError, ValueError):
+                communication_steps = 1.0
+
+            if communication_steps <= 0:
+                communication_steps = 1.0
+
+            upload_on_wire_round = upload_traffic_round * communication_steps
+            download_on_wire_round = download_traffic_round * communication_steps
+            total_upload_on_wire = upload_on_wire_round * num_rounds
+            total_download_on_wire = download_on_wire_round * num_rounds
+            overall_traffic_on_wire = total_upload_on_wire + total_download_on_wire
+            total_communication_steps = communication_steps * num_rounds
+
+            traffic_metrics: Dict[str, float] = {
+                "upload_traffic": upload_traffic_round,
+                "download_traffic": download_traffic_round,
+                "upload_traffic_per_client": model_size_bytes,
+                "overall_traffic": overall_traffic,
+                "total_upload_traffic": total_upload_traffic,
+                "total_download_traffic": total_download_traffic,
+            }
+
+            if communication_steps != 1.0:
+                traffic_metrics.update(
+                    {
+                        "communication_steps_per_round": communication_steps,
+                        "total_communication_steps": total_communication_steps,
+                        "upload_traffic_on_wire": upload_on_wire_round,
+                        "download_traffic_on_wire": download_on_wire_round,
+                        "total_upload_traffic_on_wire": total_upload_on_wire,
+                        "total_download_traffic_on_wire": total_download_on_wire,
+                        "overall_traffic_on_wire": overall_traffic_on_wire,
+                    }
+                )
+
+            report.update(traffic_metrics)
 
     if report:
         infos["report"] = report
