@@ -1,4 +1,6 @@
 import multiprocessing
+from argparse import Namespace
+from typing import Optional
 
 import torch
 import torch.multiprocessing as mp
@@ -7,36 +9,43 @@ mp.set_start_method("spawn", force=True)
 from json import dumps
 from pathlib import Path
 
+import args as args_module
 from torch import device as torch_device
-from torch.utils.data import random_split
 from utils.models import do_model_pool
 from utils.dataset import import_dataset, do_fl_partitioning
 from utils.utils import *
 from utils.file_name import gen_filename
 from utils.server import *
-from args import parse_args
 from log import logger, HFILE
-from utils.strats import Evaluate,get_model_size,EvaluateLora
-from utils.simple_quant import original_msg_size,quant_msg_size
+from utils.strats import Evaluate, EvaluateLora, get_evaluate_fn
+from utils.simple_quant import original_msg_size, quant_msg_size
 
-client_lr = args.cl_lr
+args: Optional[Namespace] = None
+client_lr: float = 0.0
+
+
+def _require_args() -> Namespace:
+    if args is None:
+        raise RuntimeError("Runtime arguments have not been initialized. Call parse_and_cache_args() first.")
+    return args
 
 
 def fit_config(server_round):
     """Return a configuration with static batch size and (local) epochs."""
     global client_lr
-    if args.milestones != 0:
-        if server_round in args.milestones:
-            client_lr *= args.lr_step
+    runtime_args = _require_args()
+    if runtime_args.milestones != 0:
+        if server_round in runtime_args.milestones:
+            client_lr *= runtime_args.lr_step
     logger.debug(f"Client lr {client_lr}, round {server_round}")
     config = {
-        "epochs": args.cl_epochs,  # number of local epochs
-        "batch_size": args.cl_bs,
+        "epochs": runtime_args.cl_epochs,  # number of local epochs
+        "batch_size": runtime_args.cl_bs,
         "cl_lr": client_lr,
-        "cl_momentum": args.cl_mmt,
-        "cl_wd":args.cl_wd,
+        "cl_momentum": runtime_args.cl_mmt,
+        "cl_wd": runtime_args.cl_wd,
         "server_round": server_round,
-        "prate" : args.prate,
+        "prate": runtime_args.prate,
     }
     return config
 
@@ -50,33 +59,35 @@ def eval_config(server_round):
     return config
 
 def build_server_info(test_set,knn_set=None):
+    runtime_args = _require_args()
     return ServerInfo(
-        model=args.model,
-        dataset_name=args.dataset,
-        feature_maps=args.feature_maps,
+        model=runtime_args.model,
+        dataset_name=runtime_args.dataset,
+        feature_maps=runtime_args.feature_maps,
         input_shape=input_shape,
         num_classes=num_classes,
-        batchn=args.batchn,
+        batchn=runtime_args.batchn,
         test_set=test_set,
         knn_set=knn_set,
-        num_clients=args.num_clients,
+        num_clients=runtime_args.num_clients,
     )
 
 if __name__ == "__main__":
     saddr = "0.0.0.0:8080"
-    args = parse_args()
+    args = args_module.parse_and_cache_args()
+    client_lr = args.cl_lr
     processes = []
 
     pool_size = args.num_clients
 
-    create_all_dirs()
+    create_all_dirs(args.path_results)
 
     # Dataset
     train_path, num_classes, input_shape = import_dataset(args.dataset, is_train=True,skip_gen_training=args.skip_gen_training,path_to_data=args.dataset_path)
     test_set = import_dataset(args.dataset, is_train=False,skip_gen_training=args.skip_gen_training,path_to_data=args.dataset_path)
 
     if args.file_name == "":
-        file_name = gen_filename()
+        file_name = gen_filename(args)
         args.file_name = file_name
     else:
         if args.id_exp != "":
@@ -140,7 +151,6 @@ if __name__ == "__main__":
     total_nb_params = -1
 
     if args.strategy == "fedavg":
-        from utils.strats import Evaluate
         from strategies.fedavg import FedAvg
 
         server_model = server_model(
@@ -160,7 +170,7 @@ if __name__ == "__main__":
         else:
             kwargs_dict["initial_parameters"] = get_tensor_parameters(server_model,args.fedbn)
 
-        kwargs_dict["evaluate_fn"] = Evaluate(server_model, test_set, device)
+        kwargs_dict["evaluate_fn"] = Evaluate(server_model, test_set, device, args)
 
         del server_model
         strategy = FedAvg(**kwargs_dict)
@@ -202,12 +212,11 @@ if __name__ == "__main__":
 
         # evaluate = get_evaluate_fn(server_model, test_set, device)
         # kwargs_dict["evaluate_fn"] = get_evaluate_fn(server_model, test_set, device)
-        kwargs_dict["evaluate_fn"] = EvaluateLora(server_model,lora_config, test_set, device)
+        kwargs_dict["evaluate_fn"] = EvaluateLora(server_model, lora_config, test_set, device, args)
 
         del server_model
         strategy = FedLora(**kwargs_dict)
     elif args.strategy == "fedprox":
-        from utils.strats import get_evaluate_fn
         from strategies import FedProx
 
         server_model = server_model(
@@ -215,7 +224,7 @@ if __name__ == "__main__":
         )
 
         kwargs_dict["initial_parameters"] = get_tensor_parameters(server_model,args.fedbn)
-        kwargs_dict["evaluate_fn"] = get_evaluate_fn(server_model, test_set, device)
+        kwargs_dict["evaluate_fn"] = get_evaluate_fn(server_model, test_set, device, args)
         kwargs_dict.update({"proximal_mu" : args.mu})
         del server_model,kwargs_dict["drop_random"],kwargs_dict["fedbn"]
         strategy = FedProx(**kwargs_dict)
@@ -288,7 +297,9 @@ if __name__ == "__main__":
 
     logger.debug(f"Client resources resolved to: {client_resources}")
 
-    if(args.wandb):
+    if args.wandb:
+        import wandb
+
         wandb.init(
             entity=args.entity,
             # set the wandb project where this run will be logged
@@ -321,6 +332,7 @@ if __name__ == "__main__":
         infos=args_dict,
         path=args.path_results,
         report_metadata=report_metadata,
+        args=args,
     )
 
     logger.info("The End")

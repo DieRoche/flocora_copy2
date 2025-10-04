@@ -3,6 +3,8 @@ import numpy as np
 from typing import Iterable, Optional
 from pathlib import Path
 
+_CACHED_ARGS: Optional[argparse.Namespace] = None
+
 def create_parser():
 
     parser = argparse.ArgumentParser(description="Federated Learning Experiments")
@@ -116,6 +118,27 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     return _postprocess_args(args)
 
 
+def cache_args(parsed_args: argparse.Namespace) -> argparse.Namespace:
+    """Store a parsed ``argparse.Namespace`` for later reuse."""
 
-# parse input arguments
-args = parse_args()
+    global _CACHED_ARGS
+    _CACHED_ARGS = parsed_args
+    return _CACHED_ARGS
+
+
+def parse_and_cache_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
+    """Parse CLI arguments and cache the resulting namespace."""
+
+    return cache_args(parse_args(argv))
+
+
+def get_args() -> argparse.Namespace:
+    """Return the cached arguments namespace.
+
+    Raises:
+        RuntimeError: If no parsed arguments have been cached yet.
+    """
+
+    if _CACHED_ARGS is None:
+        raise RuntimeError("Arguments have not been parsed yet. Call parse_and_cache_args() first.")
+    return _CACHED_ARGS

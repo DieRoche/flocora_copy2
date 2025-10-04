@@ -1,7 +1,6 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import brevitas.nn as qnn
-from args import args
 
 def _make_qconv2d_fx(in_planes, planes, kernel_size=3, padding=0, bias=False,weight_bit_width=None):
     if(weight_bit_width == None):
