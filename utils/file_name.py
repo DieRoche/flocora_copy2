@@ -1,6 +1,7 @@
-from args import args
+from argparse import Namespace
 
-def gen_filename():
+
+def gen_filename(args: Namespace):
     from utils.utils import pile_str
 
     file_name = ""

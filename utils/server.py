@@ -1,22 +1,41 @@
+from argparse import Namespace
+from typing import Optional
+
 import flwr as fl
-from utils.dcs import Info
-from main_ray import args
+
+import args as args_module
+from utils.dcs import FlInfo, Info, LoraInfo, ServerInfo
 from utils.lora import *
 from utils.utils import inst_model_info
 
-if(args.wandb):
-    import wandb
-def start_server(srv_addr, strategy, num_rounds, server_queue):
 
-    if(args.wandb):
+def _get_args() -> Optional[Namespace]:
+    try:
+        return args_module.get_args()
+    except RuntimeError:
+        return None
+
+
+def _require_args() -> Namespace:
+    args = _get_args()
+    if args is None:
+        raise RuntimeError("Arguments have not been initialized. Call parse_and_cache_args() first.")
+    return args
+
+
+def start_server(srv_addr, strategy, num_rounds, server_queue):
+    """Start the server."""
+
+    args = _get_args()
+    if args is not None and args.wandb:
+        import wandb
+
         wandb.init(
             # set the wandb project where this run will be logged
             project=args.wandb_prj_name,
             # track hyperparameters and run metadata
-            config=args
+            config=args,
         )
-
-    """Start the server."""
     if server_queue != None:
         server_queue.put(
             fl.server.start_server(
@@ -32,7 +51,9 @@ def start_server(srv_addr, strategy, num_rounds, server_queue):
             strategy=strategy,
         )
 
-def build_clients(clients_models,input_shape,num_classes):
+
+def build_clients(clients_models, input_shape, num_classes):
+    args = _require_args()
     cls_models = []
     for cl in clients_models:
         cls_models.append(
@@ -47,21 +68,25 @@ def build_clients(clients_models,input_shape,num_classes):
         )
     return cls_models
 
-def build_df_lora_config(protos : Info,lora_alpha,lora_r):
+
+def build_df_lora_config(protos: Info, lora_alpha, lora_r):
     lora_config = []
     for p in protos:
-        target_modules, modules_to_save = get_target_save(inst_model_info(p),p.model)
+        target_modules, modules_to_save = get_target_save(inst_model_info(p), p.model)
 
-        lc = LoraInfo(alpha=lora_alpha,
-                                r=lora_r,
-                                target_modules=target_modules,
-                                modules_to_save=modules_to_save)
+        lc = LoraInfo(
+            alpha=lora_alpha,
+            r=lora_r,
+            target_modules=target_modules,
+            modules_to_save=modules_to_save,
+        )
         lora_config.append(lc)
 
 
-def build_prototypes(protos,input_shape,num_classes):
+def build_prototypes(protos, input_shape, num_classes):
+    args = _require_args()
     prototypes = []
-        
+
     for p in protos:
         prototypes.append(
             Info(
@@ -75,6 +100,7 @@ def build_prototypes(protos,input_shape,num_classes):
         )
 
     return prototypes
+
 
 def start_client(info, fl_info):
     from client import FlowerClient

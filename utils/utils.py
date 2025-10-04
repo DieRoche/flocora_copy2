@@ -7,11 +7,8 @@ from models.projector import Project
 import math
 from functools import reduce
 from typing import Dict, Optional, Sequence, Tuple
-
-from args import args
-
-if args.wandb:
-    import wandb
+from argparse import Namespace
+from pathlib import Path
 
 SCALING_FACTOR = 1.2
 
@@ -123,6 +120,7 @@ def tell_history(
     infos=None,
     path="",
     report_metadata: Optional[Dict[str, float]] = None,
+    args: Optional[Namespace] = None,
 ):
     accuracy_centralized = hist.metrics_centralized.get("accuracy", [])
     acc_cent_values = _extract_metric_values(accuracy_centralized)
@@ -208,7 +206,9 @@ def tell_history(
     with open(path + file_name + ".npy", "wb") as f:
         np.save(f, infos)
 
-    if args.wandb and report:
+    if args is not None and args.wandb and report:
+        import wandb
+
         wandb.log(report)
 
 
@@ -243,12 +243,9 @@ def inst_model_lora_info(model_info: Info, lora_config : LoraInfo):
 
     return inject_low_rank(model,lora_config)
 
-def create_all_dirs():
-    from pathlib import Path
-    from args import args
-
+def create_all_dirs(path_results: str) -> None:
     Path.mkdir(Path("./data"), parents=True, exist_ok=True)
-    Path.mkdir(Path(args.path_results), parents=True, exist_ok=True)
+    Path.mkdir(Path(path_results), parents=True, exist_ok=True)
     Path.mkdir(Path("./checkpoint"), parents=True, exist_ok=True)
 
 
