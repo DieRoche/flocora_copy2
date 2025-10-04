@@ -127,6 +127,17 @@ def tell_history(
     losses_cent = hist.losses_centralized
     losses_dis = hist.losses_distributed
 
+    round_indices: Sequence[int] = []
+    if losses_dis:
+        first_entry = losses_dis[0]
+        if isinstance(first_entry, Sequence) and not isinstance(first_entry, (str, bytes)):
+            try:
+                round_indices = [int(entry[0]) for entry in losses_dis if len(entry) > 0]
+            except (TypeError, ValueError):
+                round_indices = []
+        else:
+            round_indices = list(range(1, len(losses_dis) + 1))
+
     try:
         acc_distributed = hist.metrics_distributed["dist_acc"]
     except KeyError:
@@ -178,6 +189,8 @@ def tell_history(
             }
         )
 
+    per_round_traffic_metrics: Optional[Dict[str, float]] = None
+
     if report_metadata is not None:
         model_size_bytes = report_metadata.get("model_size_bytes", 0.0) or 0.0
         clients_per_round = report_metadata.get("clients_per_round", 0.0) or 0.0
@@ -217,6 +230,12 @@ def tell_history(
                 "total_download_traffic": total_download_traffic,
             }
 
+            per_round_traffic_metrics = {
+                "upload_traffic": upload_traffic_round,
+                "download_traffic": download_traffic_round,
+                "upload_traffic_per_client": model_size_bytes,
+            }
+
             if communication_steps != 1.0:
                 traffic_metrics.update(
                     {
@@ -230,6 +249,22 @@ def tell_history(
                     }
                 )
 
+                per_round_traffic_metrics.update(
+                    {
+                        "communication_steps_per_round": communication_steps,
+                        "upload_traffic_on_wire": upload_on_wire_round,
+                        "download_traffic_on_wire": download_on_wire_round,
+                    }
+                )
+
+            if not round_indices:
+                try:
+                    round_count = int(num_rounds)
+                except (TypeError, ValueError):
+                    round_count = 0
+                if round_count > 0:
+                    round_indices = list(range(1, round_count + 1))
+
             report.update(traffic_metrics)
 
     if report:
@@ -240,6 +275,10 @@ def tell_history(
 
     if args is not None and args.wandb and report:
         import wandb
+
+        if per_round_traffic_metrics and round_indices:
+            for round_idx in round_indices:
+                wandb.log(per_round_traffic_metrics, step=int(round_idx))
 
         wandb.log(report)
 
