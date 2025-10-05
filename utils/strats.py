@@ -1,4 +1,5 @@
 from argparse import Namespace
+from typing import Any, Dict
 
 import torch
 from torch.utils.data import DataLoader
@@ -6,6 +7,46 @@ from torch.utils.data import DataLoader
 from log import logger, HFILE
 from utils.lora import extract_AB_matrix
 from utils.utils import test, save_model, set_params
+
+
+def _to_serializable(value: Any) -> Any:
+    """Convert tensors and other containers to Python-native types."""
+
+    if isinstance(value, torch.Tensor):
+        value = value.detach()
+        if value.numel() == 1:
+            return value.item()
+        return value.cpu().tolist()
+
+    if isinstance(value, dict):
+        return {key: _to_serializable(val) for key, val in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [_to_serializable(item) for item in value]
+
+    if hasattr(value, "item") and callable(getattr(value, "item")):
+        try:
+            return value.item()
+        except Exception:
+            pass
+
+    return value
+
+
+def _build_metrics(ans: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a Flower/W&B friendly metric payload from ``ans``."""
+
+    metrics = {key: _to_serializable(val) for key, val in ans.items()}
+
+    loss = metrics.get("test_loss")
+    accuracy = metrics.get("test_acc")
+
+    if loss is not None and "loss" not in metrics:
+        metrics["loss"] = loss
+    if accuracy is not None:
+        metrics.setdefault("accuracy", accuracy)
+
+    return metrics
 
 
 class Evaluate:
@@ -21,12 +62,13 @@ class Evaluate:
         self.model = model
         self.device = device
 
-    def __call__(self, server_round, parameters, config, to_log={}):
+    def __call__(self, server_round, parameters, config, to_log=None):
         set_params(self.model, parameters, self.args.fedbn)
         self.model.to(self.device)
         ans = test(self.model, self.test_loader, self.device)
-        loss = ans["test_loss"]
-        accuracy = ans["test_acc"]
+        metrics = _build_metrics(ans)
+        loss = metrics.get("test_loss")
+        accuracy = metrics.get("test_acc")
         logger.info(
             f"Server round {server_round} loss : {loss:.4f} acc : {accuracy:.4f}",
             extra=HFILE,
@@ -35,13 +77,14 @@ class Evaluate:
         if self.args.num_rounds == server_round or server_round % self.args.freq_checkpoint == 0:
             save_model(f"checkpoint/{self.args.file_name}.npy", parameters)
         if server_round != -1 and self.args.wandb:
-            to_log["acc"] = accuracy
-            to_log["loss"] = loss
+            if to_log is None:
+                to_log = {}
+            log_payload = {**to_log, **metrics}
             import wandb
 
-            wandb.log(to_log)
+            wandb.log(log_payload)
 
-        return loss, {"accuracy": accuracy}
+        return loss, metrics
 
 
 class EvaluateLora:
@@ -77,8 +120,9 @@ class EvaluateLora:
             self.past_b_matrix = current_b_list
 
         ans = test(self.model, self.test_loader, self.device)
-        loss = ans["test_loss"]
-        accuracy = ans["test_acc"]
+        metrics = _build_metrics(ans)
+        loss = metrics.get("test_loss")
+        accuracy = metrics.get("test_acc")
         logger.info(
             f"Server round {server_round} loss : {loss:.4f} acc : {accuracy:.4f}",
             extra=HFILE,
@@ -87,13 +131,12 @@ class EvaluateLora:
         if self.args.num_rounds == server_round or server_round % self.args.freq_checkpoint == 0:
             save_model(f"checkpoint/{self.args.file_name}.npy", parameters)
         if server_round != -1 and self.args.wandb:
-            to_log["acc"] = accuracy
-            to_log["loss"] = loss
+            log_payload = {**to_log, **metrics}
             import wandb
 
-            wandb.log(to_log)
+            wandb.log(log_payload)
 
-        return loss, {"accuracy": accuracy}
+        return loss, metrics
 
 
 def get_evaluate_fn(model, test_set, device, args: Namespace):
@@ -111,8 +154,9 @@ def get_evaluate_fn(model, test_set, device, args: Namespace):
         set_params(model, parameters, args.fedbn)
         model.to(device)
         ans = test(model, test_loader, device)
-        loss = ans["test_loss"]
-        accuracy = ans["test_acc"]
+        metrics = _build_metrics(ans)
+        loss = metrics.get("test_loss")
+        accuracy = metrics.get("test_acc")
         logger.info(
             f"Server round {server_round} loss : {loss:.4f} acc : {accuracy:.4f}",
             extra=HFILE,
@@ -123,9 +167,9 @@ def get_evaluate_fn(model, test_set, device, args: Namespace):
         if server_round != -1 and args.wandb:
             import wandb
 
-            wandb.log({"acc": accuracy, "loss": loss})
+            wandb.log(metrics)
 
-        return loss, {"accuracy": accuracy}
+        return loss, metrics
 
     return evaluate
 
