@@ -1,8 +1,9 @@
 from argparse import Namespace
-from typing import Any, Dict
+from typing import Any, Dict, Mapping, Optional
 
 import torch
 from torch.utils.data import DataLoader
+import numpy as np
 
 from log import logger, HFILE
 from utils.lora import extract_AB_matrix
@@ -49,6 +50,148 @@ def _build_metrics(ans: Dict[str, Any]) -> Dict[str, Any]:
     return metrics
 
 
+def _ensure_float(value: float) -> float:
+    """Return ``value`` as a plain ``float``."""
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _resolve_clients_per_round(args: Namespace, config: Optional[Mapping[str, Any]]) -> float:
+    """Return the configured number of participating clients per round."""
+
+    config = config or {}
+
+    for key in ("clients_per_round", "min_fit_clients", "sample_size"):
+        if key in config:
+            try:
+                value = float(config[key])
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+
+    if hasattr(args, "clients_per_round"):
+        try:
+            value = float(getattr(args, "clients_per_round"))
+        except (TypeError, ValueError):
+            value = 0.0
+        if value > 0:
+            return value
+
+    try:
+        pool_size = float(getattr(args, "num_clients", 0.0))
+        sample_rate = float(getattr(args, "samp_rate", 0.0))
+    except (TypeError, ValueError):
+        pool_size = 0.0
+        sample_rate = 0.0
+
+    clients_per_round = pool_size * sample_rate
+    if clients_per_round <= 0 and pool_size > 0:
+        clients_per_round = 1.0
+
+    return max(clients_per_round, 0.0)
+
+
+def _resolve_communication_steps(
+    args: Namespace, config: Optional[Mapping[str, Any]]
+) -> float:
+    """Return the number of communication steps per round."""
+
+    config = config or {}
+
+    for key in ("communication_steps_per_round", "communication_steps"):
+        if key in config:
+            try:
+                value = float(config[key])
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+
+    for attr in (
+        "communication_steps_per_round",
+        "communication_steps",
+    ):
+        if hasattr(args, attr):
+            try:
+                value = float(getattr(args, attr))
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+
+    return 1.0
+
+
+def _compute_model_payload_size(parameters: Any) -> float:
+    """Return the payload size of ``parameters`` in bytes."""
+
+    if parameters is None:
+        return 0.0
+
+    total_bytes = 0.0
+    for param in parameters:
+        if param is None:
+            continue
+        if isinstance(param, torch.Tensor):
+            total_bytes += float(param.nelement() * param.element_size())
+            continue
+        if isinstance(param, np.ndarray):
+            total_bytes += float(param.nbytes)
+            continue
+        try:
+            np_array = np.asarray(param)
+        except Exception:  # pylint: disable=broad-except
+            continue
+        total_bytes += float(np_array.nbytes)
+
+    return total_bytes
+
+
+def _build_traffic_metrics(
+    parameters: Any, args: Namespace, config: Optional[Mapping[str, Any]]
+) -> Dict[str, float]:
+    """Compute per-round traffic metrics matching ``tell_history``."""
+
+    model_size_bytes = _compute_model_payload_size(parameters)
+    if model_size_bytes <= 0:
+        return {}
+
+    clients_per_round = _resolve_clients_per_round(args, config)
+    if clients_per_round <= 0:
+        return {}
+
+    communication_steps = _resolve_communication_steps(args, config)
+    upload_traffic = model_size_bytes * clients_per_round
+    download_traffic = model_size_bytes * clients_per_round
+    overall_traffic = upload_traffic + download_traffic
+
+    metrics: Dict[str, float] = {
+        "upload_traffic": _ensure_float(upload_traffic),
+        "download_traffic": _ensure_float(download_traffic),
+        "overall_traffic": _ensure_float(overall_traffic),
+        "upload_traffic_per_client": _ensure_float(model_size_bytes),
+    }
+
+    if communication_steps != 1.0:
+        upload_on_wire = upload_traffic * communication_steps
+        download_on_wire = download_traffic * communication_steps
+        overall_on_wire = upload_on_wire + download_on_wire
+        metrics.update(
+            {
+                "communication_steps_per_round": _ensure_float(communication_steps),
+                "upload_traffic_on_wire": _ensure_float(upload_on_wire),
+                "download_traffic_on_wire": _ensure_float(download_on_wire),
+                "overall_traffic_on_wire": _ensure_float(overall_on_wire),
+            }
+        )
+
+    return metrics
+
+
 class Evaluate:
     def __init__(self, model, test_set, device, args: Namespace):
         self.args = args
@@ -67,6 +210,9 @@ class Evaluate:
         self.model.to(self.device)
         ans = test(self.model, self.test_loader, self.device)
         metrics = _build_metrics(ans)
+        traffic_metrics = _build_traffic_metrics(parameters, self.args, config)
+        if traffic_metrics:
+            metrics.update(traffic_metrics)
         loss = metrics.get("test_loss")
         accuracy = metrics.get("test_acc")
         logger.info(
@@ -121,6 +267,9 @@ class EvaluateLora:
 
         ans = test(self.model, self.test_loader, self.device)
         metrics = _build_metrics(ans)
+        traffic_metrics = _build_traffic_metrics(parameters, self.args, config)
+        if traffic_metrics:
+            metrics.update(traffic_metrics)
         loss = metrics.get("test_loss")
         accuracy = metrics.get("test_acc")
         logger.info(
@@ -155,6 +304,9 @@ def get_evaluate_fn(model, test_set, device, args: Namespace):
         model.to(device)
         ans = test(model, test_loader, device)
         metrics = _build_metrics(ans)
+        traffic_metrics = _build_traffic_metrics(parameters, args, config)
+        if traffic_metrics:
+            metrics.update(traffic_metrics)
         loss = metrics.get("test_loss")
         accuracy = metrics.get("test_acc")
         logger.info(
