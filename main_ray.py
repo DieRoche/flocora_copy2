@@ -140,6 +140,8 @@ if __name__ == "__main__":
         "fedbn": args.fedbn,
     }
 
+    kwargs_dict["fit_metrics_aggregation_fn"] = aggregate_client_metrics
+
     clients_per_round = max(kwargs_dict["min_fit_clients"], 0)
 
     device = torch_device("cuda" if torch.cuda.is_available() else "cpu")
@@ -226,8 +228,11 @@ if __name__ == "__main__":
         kwargs_dict["initial_parameters"] = get_tensor_parameters(server_model,args.fedbn)
         kwargs_dict["evaluate_fn"] = get_evaluate_fn(server_model, test_set, device, args)
         kwargs_dict.update({"proximal_mu" : args.mu})
+        agg_fn = kwargs_dict.pop("fit_metrics_aggregation_fn", None)
         del server_model,kwargs_dict["drop_random"],kwargs_dict["fedbn"]
         strategy = FedProx(**kwargs_dict)
+        if agg_fn is not None:
+            kwargs_dict["fit_metrics_aggregation_fn"] = agg_fn
     else:
         logger.error(f"Unknown strategy {args.strategy}")
         exit(-1)

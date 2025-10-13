@@ -41,13 +41,15 @@ class FlowerClient(fl.client.NumPyClient):
 
             params = return_dict["params"]
             size = return_dict["size"]
+            metrics = dict(return_dict.get("metrics", {}))
             del return_dict
         else:
-            params, size = self._new_child(mp_fit, config, parameters)
+            params, size, metrics = self._new_child(mp_fit, config, parameters)
 
         # if(self.lr_sched is not None):
         #     self.lr_sched.step()
-        return params, size, {"cid": self.fl_info.cid}
+        metrics["cid"] = self.fl_info.cid
+        return params, size, metrics
 
     def _new_child(self, mp_func, config, parameters):
         manager = mp.Manager()
@@ -68,8 +70,9 @@ class FlowerClient(fl.client.NumPyClient):
 
         params = return_dict["params"]
         size = return_dict["size"]
+        metrics = dict(return_dict.get("metrics", {}))
         del (manager, return_dict, client_process)
-        return params, size
+        return params, size, metrics
 
     def start_client(self):
         fl.client.start_numpy_client(server_address=self.fl_info.saddr, client=self)
