@@ -85,7 +85,7 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
                                 momentum = momentum,
                                 nesterov = momentum > 0.0)
 
-    train(
+    training_stats = train(
         net,
         trainloader,
         config["epochs"],
@@ -93,6 +93,17 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
         criterion,
         device,
     )
+
+    epoch_flops = []
+    if isinstance(training_stats, dict):
+        epoch_flops = training_stats.get("epoch_flops", []) or []
+
+    flop_metrics = {
+        f"flops_epoch_{idx+1}": float(value)
+        for idx, value in enumerate(epoch_flops)
+    }
+    if epoch_flops:
+        flop_metrics["flops_total"] = float(sum(epoch_flops))
     
     if fl_info.apply_quant: 
         fakequant_trainable_channel(net,fl_info.quant_bits)
@@ -105,6 +116,7 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
     net.to(torch.device("cpu"))
     return_dict["params"] = params
     return_dict["size"] = len(trainloader.dataset)
+    return_dict["metrics"] = flop_metrics
 
     del net, trainloader, optimizer, criterion
     cleanup_memory()

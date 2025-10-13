@@ -15,7 +15,7 @@ from strategies import FedAvg
 from flwr.server.strategy.aggregate import aggregate
 from flwr.common.logger import log
 
-from utils.utils import get_random_guess_perf
+from utils.utils import get_random_guess_perf, maybe_log_to_wandb
 
 class FedLora(FedAvg):
     # pylint: disable=too-many-arguments,too-many-instance-attributes,line-too-long
@@ -97,6 +97,8 @@ class FedLora(FedAvg):
         if self.fit_metrics_aggregation_fn:
             fit_metrics = [(res.num_examples, res.metrics) for _, res in results]
             metrics_aggregated = self.fit_metrics_aggregation_fn(fit_metrics)
+            if metrics_aggregated:
+                maybe_log_to_wandb(metrics_aggregated, step=server_round)
         elif server_round == 1:  # Only log this warning once
             log(WARNING, "No fit_metrics_aggregation_fn provided")
 

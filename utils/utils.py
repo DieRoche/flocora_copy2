@@ -1,14 +1,17 @@
 import torch
 import numpy as np
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from utils.models import model_selection
 from utils.dcs import *
 from models.projector import Project
 import math
 from functools import reduce
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
 from argparse import Namespace
 from pathlib import Path
+from log import logger
+from utils.flops import FlopMeter
+import args as args_module
 
 SCALING_FACTOR = 1.2
 
@@ -90,6 +93,85 @@ def set_params(model, params, fedbn = False, bb_only = False):
 
 def pile_str(line, item):
     return "_".join([line, item])
+
+
+def aggregate_client_metrics(
+    metrics: Iterable[Tuple[int, Mapping[str, object]]]
+) -> Dict[str, float]:
+    """Aggregate numeric client metrics and expose totals/means.
+
+    Parameters
+    ----------
+    metrics: Iterable[Tuple[int, Mapping[str, object]]]
+        Sequence of ``(num_examples, metrics)`` tuples as provided by Flower.
+
+    Returns
+    -------
+    Dict[str, float]
+        Aggregated metrics including per-key sums (``*_sum``), means (``*_mean``),
+        and per-example values (``*_per_example``) when the total number of
+        examples is known. The helper also exposes ``aggregated_client_count``
+        and ``aggregated_num_examples`` to aid downstream consumers.
+    """
+
+    totals: Dict[str, float] = defaultdict(float)
+    counts: Dict[str, int] = defaultdict(int)
+    aggregated: Dict[str, float] = {}
+
+    total_examples = 0
+    client_count = 0
+
+    for num_examples, client_metrics in metrics:
+        if not isinstance(client_metrics, Mapping):
+            continue
+        client_count += 1
+        try:
+            total_examples += int(num_examples)
+        except (TypeError, ValueError):
+            pass
+
+        for key, value in client_metrics.items():
+            if key == "cid":
+                continue
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError):
+                continue
+            totals[key] += numeric_value
+            counts[key] += 1
+
+    for key, total in totals.items():
+        aggregated[key] = float(total)
+        aggregated[f"{key}_sum"] = float(total)
+        aggregated[f"{key}_mean"] = float(total) / float(counts[key])
+        if total_examples > 0:
+            aggregated[f"{key}_per_example"] = float(total) / float(total_examples)
+
+    if client_count > 0:
+        aggregated["aggregated_client_count"] = float(client_count)
+    if total_examples > 0:
+        aggregated["aggregated_num_examples"] = float(total_examples)
+
+    return aggregated
+
+
+def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = None) -> None:
+    """Log metrics to Weights & Biases when the integration is enabled."""
+
+    if not metrics:
+        return
+
+    try:
+        runtime_args = args_module.get_args()
+    except RuntimeError:
+        return
+
+    if not getattr(runtime_args, "wandb", False):
+        return
+
+    import wandb
+
+    wandb.log(dict(metrics), step=step)
 
 
 def _extract_metric_values(
@@ -225,6 +307,7 @@ def tell_history(
                 "upload_traffic": upload_traffic_round,
                 "download_traffic": download_traffic_round,
                 "upload_traffic_per_client": model_size_bytes,
+                "per_user_upload_traffic": model_size_bytes,
                 "overall_traffic": overall_traffic,
                 "total_upload_traffic": total_upload_traffic,
                 "total_download_traffic": total_download_traffic,
@@ -234,6 +317,7 @@ def tell_history(
                 "upload_traffic": upload_traffic_round,
                 "download_traffic": download_traffic_round,
                 "upload_traffic_per_client": model_size_bytes,
+                "per_user_upload_traffic": model_size_bytes,
             }
 
             if communication_steps != 1.0:
@@ -321,17 +405,36 @@ def create_all_dirs(path_results: str) -> None:
 
 
 def train(net, trainloader, epochs, optimizer, criterion, device):
-    """Train the network on the training set."""
+    """Train the network on the training set and track FLOPs per epoch."""
 
     net.train()
-    for _ in range(epochs):
+    flop_meter = FlopMeter(net)
+    epoch_flops: list[float] = []
+
+    for epoch_idx in range(epochs):
+        flop_meter.start_epoch()
         for images, labels, _ in trainloader:
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
+            flop_meter.start_batch()
             out, _ = net(images)
             loss = criterion(out, labels)
             loss.backward()
             optimizer.step()
+            flop_meter.finish_batch()
+
+        epoch_total_flops = flop_meter.finish_epoch()
+        epoch_flops.append(epoch_total_flops)
+        logger.info(
+            "Epoch %s/%s - approx FLOPs: %.2f",
+            epoch_idx + 1,
+            epochs,
+            epoch_total_flops,
+        )
+
+    flop_meter.close()
+
+    return {"epoch_flops": epoch_flops}
 
 
 def test(model, test_loader, device):
