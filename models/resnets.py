@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Any, Callable, List, Optional, Type, Union
+from typing import Any, Callable, List, Optional, Tuple, Type, Union
 
 import torch
 import torch.nn as nn
@@ -75,6 +75,12 @@ class Bottleneck(nn.Module):
 
         return out
 
+
+# NOTE: The original ResNet implementation below is kept for the
+# dynamically-scaled CIFAR-style models used across most of the codebase.
+# A dedicated ResNet18 implementation that mirrors the user's version but
+# stays compatible with the rest of the project is provided later in this
+# file (see ``CifarResNet18``).
 
 class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes, large_input, width, zero_init_residual=False,batchn=True):
@@ -169,11 +175,152 @@ def resnet8(feature_maps, input_shape, num_classes,batchn=False):
 
     return ResNet(BasicBlock, [(1, 1, 1), (1, 2, 2), (1, 2, 4)], num_classes, large_input, width,batchn)
 
-def resnet18(feature_maps, input_shape, num_classes,batchn=False):
-    large_input = False
-    width=feature_maps
+class CifarBasicBlock(nn.Module):
+    """Basic block mirroring the standard ResNet18 layout.
 
-    return ResNet(BasicBlock, [(2, 1, 1), (2, 2, 2), (2, 2, 4), (2, 2, 8)], num_classes, large_input, width,batchn)
+    The block supports both BatchNorm and GroupNorm depending on the
+    ``batchn`` flag propagated by ``CifarResNet18``.
+    """
+
+    expansion: int = 1
+
+    def __init__(self, in_channels: int, out_channels: int, stride: int, norm_layer: Callable[[int], nn.Module]):
+        super().__init__()
+        self.conv1 = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            stride=stride,
+            padding=1,
+            bias=False,
+        )
+        self.bn1 = norm_layer(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(
+            out_channels,
+            out_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            bias=False,
+        )
+        self.bn2 = norm_layer(out_channels)
+
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(
+                    in_channels,
+                    out_channels,
+                    kernel_size=1,
+                    stride=stride,
+                    bias=False,
+                ),
+                norm_layer(out_channels),
+            )
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, x: Tensor) -> Tensor:
+        identity = self.shortcut(x)
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        out += identity
+        out = self.relu(out)
+        return out
+
+
+class CifarResNet18(nn.Module):
+    """ResNet18 variant compatible with the project's expectations.
+
+    The implementation mirrors the user's reference model while exposing the
+    same signature used across ``model_selection`` (feature maps scaling,
+    optional BatchNorm/GroupNorm, tuple output ``(logits, features)`` and a
+    ``features_dim`` attribute).
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        base_channels: int,
+        num_classes: int,
+        use_batchnorm: bool = False,
+    ) -> None:
+        super().__init__()
+        self.use_batchnorm = use_batchnorm
+
+        self.in_channels = base_channels
+        self.conv1 = nn.Conv2d(
+            in_channels,
+            base_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            bias=False,
+        )
+        self.bn1 = self._make_norm(base_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
+        self.layer1 = self._make_layer(base_channels, blocks=2, stride=1)
+        self.layer2 = self._make_layer(base_channels * 2, blocks=2, stride=2)
+        self.layer3 = self._make_layer(base_channels * 4, blocks=2, stride=2)
+        self.layer4 = self._make_layer(base_channels * 8, blocks=2, stride=2)
+
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.features_dim = base_channels * 8
+        self.fc = nn.Linear(self.features_dim, num_classes)
+
+    def _make_norm(self, num_features: int) -> nn.Module:
+        if self.use_batchnorm:
+            return nn.BatchNorm2d(num_features)
+        return nn.GroupNorm(2, num_features)
+
+    def _make_layer(self, out_channels: int, blocks: int, stride: int) -> nn.Sequential:
+        layers: List[nn.Module] = []
+        layers.append(CifarBasicBlock(self.in_channels, out_channels, stride, self._make_norm))
+        self.in_channels = out_channels
+        for _ in range(1, blocks):
+            layers.append(CifarBasicBlock(self.in_channels, out_channels, 1, self._make_norm))
+        return nn.Sequential(*layers)
+
+    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.maxpool(out)
+
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+
+        out = self.avgpool(out)
+        features = torch.flatten(out, 1)
+        logits = self.fc(features)
+        return logits, features
+
+
+def _resolve_input_channels(input_shape: Any) -> int:
+    """Utility to robustly infer the number of input channels."""
+
+    if isinstance(input_shape, (list, tuple)) and len(input_shape) > 0:
+        return int(input_shape[0])
+    if isinstance(input_shape, torch.Size) and len(input_shape) > 0:
+        return int(input_shape[0])
+    if isinstance(input_shape, int):
+        return input_shape
+    return 3
+
+
+def resnet18(feature_maps, input_shape, num_classes, batchn=False):
+    in_channels = _resolve_input_channels(input_shape)
+    return CifarResNet18(in_channels, feature_maps, num_classes, use_batchnorm=batchn)
 
 def resnet34(feature_maps, input_shape, num_classes,batchn=False):
     large_input = False
