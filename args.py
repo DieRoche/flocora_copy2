@@ -10,7 +10,7 @@ def create_parser():
     parser = argparse.ArgumentParser(description="Federated Learning Experiments")
 
     ## FL
-    parser.add_argument("--num_rounds", type=int, default=10,help="number of rounds for a federated learning training")
+    parser.add_argument("--num_rounds", type=int, default=100,help="number of rounds for a federated learning training")
     parser.add_argument("--num_clients", type=int, default=10,help="number of clients")
     parser.add_argument("--alpha",type=float, default=0.5,help="alpha used for LDA")
     parser.add_argument("--alpha_inf",action="store_true",help="special flag to use alpha as infinity") # uniform
