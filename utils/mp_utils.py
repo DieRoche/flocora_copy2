@@ -1,5 +1,7 @@
 import gc
-from typing import Any
+
+from typing import Any, Iterable, Optional
+
 
 import torch
 from prune import prune
@@ -78,6 +80,84 @@ def _get_module_rank(lora_config, module_name: str) -> int:
     return fallback_rank if fallback_rank > 0 else 0
 
 
+def _iter_module_search_roots(model: torch.nn.Module) -> Iterable[torch.nn.Module]:
+    """Yield the module roots that may contain LoRA-wrapped submodules."""
+
+    if model is not None:
+        yield model
+
+    base_model = getattr(model, "base_model", None)
+    if isinstance(base_model, torch.nn.Module):
+        yield base_model
+        inner_model = getattr(base_model, "model", None)
+        if isinstance(inner_model, torch.nn.Module):
+            yield inner_model
+
+
+def _locate_module(model: torch.nn.Module, module_name: str) -> Optional[torch.nn.Module]:
+    """Return the module referenced by ``module_name`` even when wrapped by PEFT."""
+
+    candidate_paths = [module_name]
+
+    if module_name:
+        candidate_paths.append(f"base_model.{module_name}")
+        candidate_paths.append(f"base_model.model.{module_name}")
+
+    for root in _iter_module_search_roots(model):
+        if root is None:
+            continue
+
+        for path in candidate_paths:
+            try:
+                return root.get_submodule(path)
+            except (AttributeError, KeyError):
+                continue
+
+        modules = dict(root.named_modules())
+        if module_name in modules:
+            return modules[module_name]
+
+    # Fallback to suffix search to handle duplicated wrappers while
+    # preferring longer matches.
+    for root in _iter_module_search_roots(model):
+        if root is None:
+            continue
+        for name, module in sorted(
+            root.named_modules(), key=lambda item: len(item[0]), reverse=True
+        ):
+            if name.endswith(module_name):
+                return module
+
+    return None
+
+
+def _extract_lora_ranks(module: torch.nn.Module) -> Iterable[int]:
+    """Return the ranks of all active LoRA adapters attached to ``module``."""
+
+    lora_A = getattr(module, "lora_A", None)
+    lora_B = getattr(module, "lora_B", None)
+
+    if not isinstance(lora_A, torch.nn.ModuleDict) or not isinstance(
+        lora_B, torch.nn.ModuleDict
+    ):
+        return []
+
+    ranks = []
+    for adapter_name, adapter_module in lora_A.items():
+        if adapter_name not in lora_B:
+            continue
+
+        weight = getattr(adapter_module, "weight", None)
+        if weight is None or weight.ndim == 0:
+            continue
+
+        rank = int(weight.shape[0]) if weight.shape[0] > 0 else 0
+        if rank > 0:
+            ranks.append(rank)
+
+    return ranks
+
+
 def _estimate_lora_projection_flops(model: torch.nn.Module, lora_config) -> float:
     """Approximate the FLOPs required to project LoRA adapters to dense weights."""
 
@@ -88,11 +168,11 @@ def _estimate_lora_projection_flops(model: torch.nn.Module, lora_config) -> floa
     if not target_modules:
         return 0.0
 
-    modules = dict(model.named_modules())
     total_flops = 0.0
+    rank_pattern = getattr(lora_config, "rank_pattern", None)
 
     for module_name in target_modules:
-        module = modules.get(module_name)
+        module = _locate_module(model, module_name)
         if module is None:
             continue
 
@@ -100,9 +180,15 @@ def _estimate_lora_projection_flops(model: torch.nn.Module, lora_config) -> floa
         if weight is None or weight.ndim == 0:
             continue
 
-        rank = _get_module_rank(lora_config, module_name)
-        if rank <= 0:
-            continue
+        ranks = list(_extract_lora_ranks(module))
+        if not ranks:
+            if isinstance(rank_pattern, dict) and module_name not in rank_pattern:
+                continue
+
+            fallback_rank = _get_module_rank(lora_config, module_name)
+            if fallback_rank <= 0:
+                continue
+            ranks = [fallback_rank]
 
         out_dim = int(weight.shape[0])
         if out_dim <= 0:
@@ -112,7 +198,8 @@ def _estimate_lora_projection_flops(model: torch.nn.Module, lora_config) -> floa
         if per_output_features <= 0:
             continue
 
-        total_flops += 2.0 * float(out_dim) * float(per_output_features) * float(rank)
+        for rank in ranks:
+            total_flops += 2.0 * float(out_dim) * float(per_output_features) * float(rank)
 
     return float(total_flops)
 
