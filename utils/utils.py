@@ -118,6 +118,17 @@ def aggregate_client_metrics(
     counts: Dict[str, int] = defaultdict(int)
     aggregated: Dict[str, float] = {}
 
+    special_metric_keys = {
+        "flops_by_epoch",
+        "flops_compression",
+        "flops_decompression",
+        "sum_flops_epoch_includingcompdecomp",
+        "total_flops",
+    }
+
+    if not hasattr(aggregate_client_metrics, "_running_total_flops"):
+        aggregate_client_metrics._running_total_flops = 0.0  # type: ignore[attr-defined]
+
     total_examples = 0
     client_count = 0
 
@@ -140,7 +151,19 @@ def aggregate_client_metrics(
             totals[key] += numeric_value
             counts[key] += 1
 
+    if "sum_flops_epoch_includingcompdecomp" in totals:
+        running_total = getattr(
+            aggregate_client_metrics, "_running_total_flops", 0.0
+        )
+        running_total += float(totals["sum_flops_epoch_includingcompdecomp"])
+        aggregate_client_metrics._running_total_flops = running_total  # type: ignore[attr-defined]
+        totals["total_flops"] = running_total
+        counts["total_flops"] = 1
+
     for key, total in totals.items():
+        if key in special_metric_keys:
+            aggregated[key] = float(total)
+            continue
         aggregated[key] = float(total)
         aggregated[f"{key}_sum"] = float(total)
         aggregated[f"{key}_mean"] = float(total) / float(counts[key])

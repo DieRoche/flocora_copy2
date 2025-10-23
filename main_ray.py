@@ -140,6 +140,7 @@ if __name__ == "__main__":
         "fedbn": args.fedbn,
     }
 
+    aggregate_client_metrics._running_total_flops = 0.0  # type: ignore[attr-defined]
     kwargs_dict["fit_metrics_aggregation_fn"] = aggregate_client_metrics
 
     clients_per_round = max(kwargs_dict["min_fit_clients"], 0)
