@@ -1,52 +1,135 @@
+import copy
+import math
+from collections import OrderedDict
+from types import MethodType
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from peft import LoraConfig,LoHaConfig,get_peft_model_state_dict,set_peft_model_state_dict
-from peft import get_peft_model
-from collections import OrderedDict
-import numpy as np
-from utils.dcs import LoraInfo
+from peft import (
+    LoHaConfig,
+    LoraConfig,
+    get_peft_model,
+    get_peft_model_state_dict,
+    set_peft_model_state_dict,
+)
 from torch.nn.init import orthogonal_
-import math
-import copy
 
-def inject_low_rank(model,lora_config: LoraInfo):
-    alpha = lora_config.alpha
-    r = lora_config.r
-    target_modules = lora_config.target_modules
-    modules_to_save = lora_config.modules_to_save
-    rank_pattern = lora_config.rank_pattern
-    if lora_config.lora_type == "lora":
-        lora_config = LoraConfig(
-        lora_alpha=alpha,
-        lora_dropout=0.0,
-        r=r,
-        bias="none",
-        target_modules=target_modules,
-        modules_to_save=modules_to_save,
-        rank_pattern=rank_pattern
+from utils.dcs import LoraInfo
+from utils.flocora_adapters import (
+    FLoCoRAConv2dAdapter,
+    FLoCoRALinearAdapter,
+    wrap_efficientnet_with_adapters,
+)
+
+
+def _is_peft_model(model: nn.Module) -> bool:
+    return hasattr(model, "peft_config") and hasattr(model, "base_model")
+
+
+def _iter_adapter_parameters(model: nn.Module):
+    for name, parameter in model.named_parameters():
+        if "lora_" in name:
+            yield name, parameter
+
+
+def _ensure_trainable_api(model: nn.Module) -> nn.Module:
+    if not hasattr(model, "get_nb_trainable_parameters"):
+        def get_nb_trainable_parameters(self):
+            trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            total = sum(p.numel() for p in self.parameters())
+            return trainable, total
+
+        model.get_nb_trainable_parameters = MethodType(get_nb_trainable_parameters, model)
+
+    if not hasattr(model, "print_trainable_parameters"):
+        def print_trainable_parameters(self):
+            trainable, total = self.get_nb_trainable_parameters()
+            ratio = (100 * trainable / total) if total else 0.0
+            print(
+                f"trainable params: {trainable} || total params: {total} || trainable%: {ratio:.2f}"
+            )
+
+        model.print_trainable_parameters = MethodType(print_trainable_parameters, model)
+
+    return model
+
+def inject_low_rank(model, lora_config: LoraInfo):
+    if lora_config is None:
+        return _ensure_trainable_api(model)
+
+    is_effnet = (
+        model.__class__.__module__ == "effnet"
+        and model.__class__.__name__ == "EfficientNetB0_CIFAR"
     )
-    elif lora_config.lora_type == "loha":
-        lora_config = LoHaConfig(
-        use_effective_conv2d = True,
-        alpha=alpha,
-        r=1,
-        target_modules=target_modules,
-        modules_to_save=modules_to_save,
-        rank_pattern=rank_pattern
-    )
-    return get_peft_model(model,lora_config)
+
+    lora_type = getattr(lora_config, "lora_type", "lora") or "lora"
+
+    if is_effnet and lora_type == "lora":
+        wrap_efficientnet_with_adapters(model, lora_config)
+        return _ensure_trainable_api(model)
+
+    alpha = getattr(lora_config, "alpha", 1)
+    r = getattr(lora_config, "r", 0)
+    target_modules = getattr(lora_config, "target_modules", None)
+    modules_to_save = getattr(lora_config, "modules_to_save", None)
+    rank_pattern = getattr(lora_config, "rank_pattern", None)
+
+    if lora_type == "lora":
+        peft_config = LoraConfig(
+            lora_alpha=alpha,
+            lora_dropout=0.0,
+            r=r,
+            bias="none",
+            target_modules=target_modules,
+            modules_to_save=modules_to_save,
+            rank_pattern=rank_pattern,
+        )
+    elif lora_type == "loha":
+        peft_config = LoHaConfig(
+            use_effective_conv2d=True,
+            alpha=alpha,
+            r=1,
+            target_modules=target_modules,
+            modules_to_save=modules_to_save,
+            rank_pattern=rank_pattern,
+        )
+    else:
+        return _ensure_trainable_api(model)
+
+    wrapped = get_peft_model(model, peft_config)
+    return _ensure_trainable_api(wrapped)
 
 def get_lora_params(lora_model):
-    state_dict = get_peft_model_state_dict(model=lora_model)
-    return [val.cpu().numpy() for _, val in state_dict.items()]
+    if _is_peft_model(lora_model):
+        state_dict = get_peft_model_state_dict(model=lora_model)
+        return [val.cpu().numpy() for _, val in state_dict.items()]
 
-def set_lora_params(lora_model,adapter_params):
-    lora_state_dict = get_peft_model_state_dict(lora_model)
-    keys = lora_state_dict.keys()
-    params_dict = zip(keys, adapter_params)
-    state_dict = OrderedDict({k: torch.from_numpy(np.copy(v)) for k, v in params_dict})
-    return set_peft_model_state_dict(lora_model,state_dict)
+    adapter_state = OrderedDict(
+        (name, param.detach().cpu().clone())
+        for name, param in _iter_adapter_parameters(lora_model)
+    )
+    return [tensor.numpy() for tensor in adapter_state.values()]
+
+
+def set_lora_params(lora_model, adapter_params):
+    if _is_peft_model(lora_model):
+        lora_state_dict = get_peft_model_state_dict(lora_model)
+        keys = lora_state_dict.keys()
+        params_dict = zip(keys, adapter_params)
+        state_dict = OrderedDict({k: torch.from_numpy(np.copy(v)) for k, v in params_dict})
+        return set_peft_model_state_dict(lora_model, state_dict)
+
+    adapter_params = list(adapter_params)
+    named_params = list(_iter_adapter_parameters(lora_model))
+    if len(adapter_params) != len(named_params):
+        raise ValueError("Adapter parameter count mismatch")
+
+    for (name, parameter), values in zip(named_params, adapter_params):
+        tensor = torch.from_numpy(np.copy(values)).to(parameter.device, dtype=parameter.dtype)
+        parameter.data.copy_(tensor)
+    return lora_model
 
 def singular_value(p):
     sv = math.sqrt(p.shape[0] / p.shape[1])
