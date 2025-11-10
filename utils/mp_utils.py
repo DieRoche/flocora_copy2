@@ -137,25 +137,36 @@ def _extract_lora_ranks(module: torch.nn.Module) -> Iterable[int]:
     lora_A = getattr(module, "lora_A", None)
     lora_B = getattr(module, "lora_B", None)
 
-    if not isinstance(lora_A, torch.nn.ModuleDict) or not isinstance(
+    if isinstance(lora_A, torch.nn.ModuleDict) and isinstance(
         lora_B, torch.nn.ModuleDict
     ):
-        return []
+        ranks = []
+        for adapter_name, adapter_module in lora_A.items():
+            if adapter_name not in lora_B:
+                continue
 
-    ranks = []
-    for adapter_name, adapter_module in lora_A.items():
-        if adapter_name not in lora_B:
-            continue
+            weight = getattr(adapter_module, "weight", None)
+            if weight is None or weight.ndim == 0:
+                continue
 
-        weight = getattr(adapter_module, "weight", None)
-        if weight is None or weight.ndim == 0:
-            continue
+            rank = int(weight.shape[0]) if weight.shape[0] > 0 else 0
+            if rank > 0:
+                ranks.append(rank)
 
-        rank = int(weight.shape[0]) if weight.shape[0] > 0 else 0
+        return ranks
+
+    if isinstance(lora_A, torch.nn.Parameter) and isinstance(
+        lora_B, torch.nn.Parameter
+    ):
+        rank = 0
+        if lora_A.ndim > 0:
+            rank = int(lora_A.shape[0])
+        if rank <= 0 and lora_B.ndim > 1:
+            rank = int(lora_B.shape[1])
         if rank > 0:
-            ranks.append(rank)
+            return [rank]
 
-    return ranks
+    return []
 
 
 def _estimate_lora_projection_flops(model: torch.nn.Module, lora_config) -> float:
@@ -177,7 +188,10 @@ def _estimate_lora_projection_flops(model: torch.nn.Module, lora_config) -> floa
             continue
 
         weight = getattr(module, "weight", None)
-        if weight is None or weight.ndim == 0:
+        if weight is None:
+            weight = getattr(module, "base_weight", None)
+
+        if weight is None or getattr(weight, "ndim", 0) == 0:
             continue
 
         ranks = list(_extract_lora_ranks(module))
