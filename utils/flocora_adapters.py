@@ -1,6 +1,6 @@
 """Adapters implementing FLoCoRA-style low-rank updates for convolution and linear layers."""
 
-from typing import Iterable, List, Optional, Sequence, Set, Tuple, Union
+from typing import Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -10,7 +10,6 @@ import torch.nn.functional as F
 __all__ = [
     "FLoCoRAConv2dAdapter",
     "FLoCoRALinearAdapter",
-    "wrap_efficientnet_with_adapters",
 ]
 
 
@@ -28,59 +27,12 @@ def _deterministic_generator(device: torch.device) -> torch.Generator:
     return torch.Generator()
 
 
-def _normalize_module_names(modules: Optional[Sequence[str]]) -> Tuple[str, ...]:
-    if not modules:
-        return ()
-    normalized: List[str] = []
-    seen: Set[str] = set()
-    for name in modules:
-        if not isinstance(name, str):
-            continue
-        trimmed = name.strip()
-        if not trimmed or trimmed in seen:
-            continue
-        seen.add(trimmed)
-        normalized.append(trimmed)
-    return tuple(normalized)
-
-
 def _parameter_belongs_to_module(parameter_name: str, module_name: str) -> bool:
     if not module_name:
         return False
     if parameter_name == module_name:
         return True
     return parameter_name.startswith(f"{module_name}.")
-
-
-def _apply_peft_freezing(
-    model: nn.Module,
-    modules_to_save: Tuple[str, ...],
-    parameters_to_save: Tuple[str, ...] = (),
-) -> None:
-    for parameter in model.parameters():
-        parameter.requires_grad = False
-
-    for module in model.modules():
-        if isinstance(module, (FLoCoRAConv2dAdapter, FLoCoRALinearAdapter)):
-            if getattr(module, "lora_A", None) is not None:
-                module.lora_A.requires_grad = True
-            if getattr(module, "lora_B", None) is not None:
-                module.lora_B.requires_grad = True
-
-    module_map = dict(model.named_modules())
-    for module_name in modules_to_save:
-        module = module_map.get(module_name)
-        if module is None:
-            continue
-        for parameter in module.parameters():
-            parameter.requires_grad = True
-
-    parameter_map = dict(model.named_parameters())
-    for parameter_name in parameters_to_save:
-        parameter = parameter_map.get(parameter_name)
-        if parameter is None:
-            continue
-        parameter.requires_grad = True
 
 
 class _BaseAdapter(nn.Module):
@@ -325,89 +277,3 @@ def _resolve_rank(lora_config, module_name: str) -> int:
         fallback = 0
     return fallback if fallback > 0 else 0
 
-
-def _iter_target_names(lora_config) -> Iterable[str]:
-    seen: Set[str] = set()
-    for collection_name in ("target_modules", "rank_pattern"):
-        collection = getattr(lora_config, collection_name, None)
-        if isinstance(collection, dict):
-            for name in collection.keys():
-                if name not in seen:
-                    seen.add(name)
-                    yield name
-        elif isinstance(collection, (list, tuple, set)):
-            for name in collection:
-                if isinstance(name, str) and name not in seen:
-                    seen.add(name)
-                    yield name
-
-
-def _replace_module(root: nn.Module, module_name: str, new_module: nn.Module) -> None:
-    if not module_name:
-        raise ValueError("module_name must be a non-empty string")
-    parts = module_name.split(".")
-    parent = root
-    for part in parts[:-1]:
-        parent = parent._modules[part]
-    key = parts[-1]
-    current = parent._modules.get(key)
-    if isinstance(current, (FLoCoRAConv2dAdapter, FLoCoRALinearAdapter)):
-        return
-    parent._modules[key] = new_module
-
-
-def wrap_efficientnet_with_adapters(model: nn.Module, lora_config) -> nn.Module:
-    target_names = tuple(_iter_target_names(lora_config))
-    requested_modules_to_save = _normalize_module_names(getattr(lora_config, "modules_to_save", None))
-
-    modules = list(model.named_modules())
-    inserted_any_adapter = False
-
-    if target_names:
-        alpha = getattr(lora_config, "alpha", 1.0)
-        target_set = set(target_names)
-        for name, module in modules:
-            if name not in target_set:
-                continue
-            if isinstance(module, (FLoCoRAConv2dAdapter, FLoCoRALinearAdapter)):
-                continue
-            rank = _resolve_rank(lora_config, name)
-            if rank <= 0:
-                continue
-            if isinstance(module, nn.Conv2d):
-                adapter = FLoCoRAConv2dAdapter.from_conv(module, rank=rank, alpha=alpha)
-            elif isinstance(module, nn.Linear):
-                adapter = FLoCoRALinearAdapter.from_linear(module, rank=rank, alpha=alpha)
-            else:
-                continue
-            _replace_module(model, name, adapter)
-            inserted_any_adapter = True
-
-    current_module_map = dict(model.named_modules())
-    current_parameter_map = dict(model.named_parameters())
-    current_buffer_map = dict(model.named_buffers())
-
-    resolved_module_names = tuple(
-        dict.fromkeys(name for name in requested_modules_to_save if name in current_module_map)
-    )
-    resolved_parameter_names = tuple(
-        dict.fromkeys(name for name in requested_modules_to_save if name in current_parameter_map)
-    )
-    resolved_buffer_names = tuple(
-        dict.fromkeys(name for name in requested_modules_to_save if name in current_buffer_map)
-    )
-
-    if inserted_any_adapter or resolved_module_names or resolved_parameter_names:
-        _apply_peft_freezing(
-            model,
-            resolved_module_names,
-            resolved_parameter_names,
-        )
-
-    combined_modules_to_save = tuple(
-        dict.fromkeys(resolved_module_names + resolved_parameter_names + resolved_buffer_names)
-    )
-
-    setattr(model, "_flocora_target_modules", tuple(dict.fromkeys(target_names)))
-    setattr(model, "_flocora_modules_to_save", combined_modules_to_save)
-    return model

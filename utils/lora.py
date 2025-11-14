@@ -22,7 +22,6 @@ from utils.flocora_adapters import (
     FLoCoRAConv2dAdapter,
     FLoCoRALinearAdapter,
     _parameter_belongs_to_module,
-    wrap_efficientnet_with_adapters,
 )
 
 
@@ -81,16 +80,7 @@ def inject_low_rank(model, lora_config: LoraInfo):
     if lora_config is None:
         return _ensure_trainable_api(model)
 
-    is_effnet = (
-        model.__class__.__module__ == "effnet"
-        and model.__class__.__name__ == "EfficientNetB0_CIFAR"
-    )
-
     lora_type = getattr(lora_config, "lora_type", "lora") or "lora"
-
-    if is_effnet and lora_type == "lora":
-        wrap_efficientnet_with_adapters(model, lora_config)
-        return _ensure_trainable_api(model)
 
     alpha = getattr(lora_config, "alpha", 1)
     r = getattr(lora_config, "r", 0)
@@ -196,42 +186,6 @@ def calc_conv_from_ratio(out_channels,in_channels,kernel_size,ratio): # Return t
         return np.max((r, r3)) 
 
 def gen_rank_pattern(model,r,mode=3,ratio=0):
-
-    is_effnet = (
-        model.__class__.__module__ == "effnet"
-        and model.__class__.__name__ == "EfficientNetB0_CIFAR"
-    )
-
-    if is_effnet:
-        target_modules = []
-        modules_to_save = []
-        rank_pattern = {}
-
-        for name, m in model.named_modules():
-            if isinstance(m, torch.nn.Conv2d):
-                if (
-                    m.kernel_size == (1, 1)
-                    and m.groups == 1
-                    and name.startswith("stages")
-                ):
-                    target_modules.append(name)
-                    if ratio > 0.0:
-                        out_channels = m.out_channels
-                        in_channels = m.in_channels
-                        kernel_size = m.kernel_size[0]
-                        rank_pattern[name] = calc_conv_from_ratio(
-                            out_channels, in_channels, kernel_size, ratio=ratio
-                        )
-                    else:
-                        rank_pattern[name] = r
-            elif isinstance(m, torch.nn.Linear) and name == "fc":
-                target_modules.append(name)
-                rank_pattern[name] = r
-
-            if isinstance(m, (torch.nn.BatchNorm2d, torch.nn.GroupNorm)):
-                modules_to_save.append(name)
-
-        return target_modules, modules_to_save, rank_pattern
 
     if mode == 0 : # mode all lora, all frozen
         target_instances = (torch.nn.Conv2d,torch.nn.Linear)

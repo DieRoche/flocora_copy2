@@ -28,9 +28,13 @@ def create_parser():
 
     ## Model
     # The string provided here is resolved through ``utils.models.model_selection``;
-    # for example ``resnet18`` maps to ``models.resnets.CifarResNet18`` while
-    # ``effnet`` instantiates the EfficientNet-B0 backbone defined in ``effnet.py``.
-    parser.add_argument("--model", type = str, default='effnet',help="model to use (effnet, resnet18, resnet20, qresnet12)")
+    # for example ``resnet18`` maps to ``models.resnets.CifarResNet18``.
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="resnet18",
+        help="model to use (resnet18, resnet20, qresnet12, vgg11, mobilenetv2, ...)",
+    )
     parser.add_argument("--feature_maps", type=int, default=16,help="number of feature maps for the model")
     parser.add_argument("--batchn", action="store_true",help="to use batch norm or group norm")
 

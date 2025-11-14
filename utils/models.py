@@ -79,9 +79,6 @@ def model_selection(model):
     elif(model_name == "mobilenetv2"):
         from models.mobilenetv2 import mobilenetv2
         fn_model = mobilenetv2
-    elif(model_name == "effnet"):
-        from effnet import effnet
-        fn_model = effnet
     elif(model_name == "shufflenetv2"):
         from models.shufflenetv2 import shufflenetv2
         fn_model = shufflenetv2
