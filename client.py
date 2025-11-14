@@ -79,7 +79,6 @@ class FlowerClient(fl.client.NumPyClient):
 
 # def client_dry_run():
 
-#     # model = utils.load_efficientnet(classes=10)
 #     # trainset, testset = utils.load_partition(0)
 #     # trainset = torch.utils.data.Subset(trainset, range(10))
 #     # testset = torch.utils.data.Subset(testset, range(10))
