@@ -1,6 +1,6 @@
 """Adapters implementing FLoCoRA-style low-rank updates for convolution and linear layers."""
 
-from typing import Iterable, Optional, Sequence, Set, Tuple, Union
+from typing import Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -28,8 +28,54 @@ def _deterministic_generator(device: torch.device) -> torch.Generator:
     return torch.Generator()
 
 
+def _normalize_module_names(modules: Optional[Sequence[str]]) -> Tuple[str, ...]:
+    if not modules:
+        return ()
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for name in modules:
+        if not isinstance(name, str):
+            continue
+        trimmed = name.strip()
+        if not trimmed or trimmed in seen:
+            continue
+        seen.add(trimmed)
+        normalized.append(trimmed)
+    return tuple(normalized)
+
+
+def _parameter_belongs_to_module(parameter_name: str, module_name: str) -> bool:
+    if not module_name:
+        return False
+    if parameter_name == module_name:
+        return True
+    return parameter_name.startswith(f"{module_name}.")
+
+
+def _apply_peft_freezing(model: nn.Module, modules_to_save: Tuple[str, ...]) -> None:
+    for parameter in model.parameters():
+        parameter.requires_grad = False
+
+    for module in model.modules():
+        if isinstance(module, (FLoCoRAConv2dAdapter, FLoCoRALinearAdapter)):
+            if getattr(module, "lora_A", None) is not None:
+                module.lora_A.requires_grad = True
+            if getattr(module, "lora_B", None) is not None:
+                module.lora_B.requires_grad = True
+
+    module_map = dict(model.named_modules())
+    for module_name in modules_to_save:
+        module = module_map.get(module_name)
+        if module is None:
+            continue
+        for parameter in module.parameters():
+            parameter.requires_grad = True
+
+
 class _BaseAdapter(nn.Module):
     """Shared logic for FLoCoRA adapters."""
+
+    _NON_SERIALIZED_BUFFERS: Tuple[str, ...] = ("base_weight", "base_bias")
 
     def __init__(self, alpha: float, rank: int) -> None:
         super().__init__()
@@ -49,6 +95,49 @@ class _BaseAdapter(nn.Module):
                     parameter.normal_(mean=0.0, std=std, generator=generator)
                 else:
                     parameter.normal_(mean=0.0, std=std, generator=generator)
+
+    def _save_to_state_dict(self, destination, prefix, keep_vars):  # type: ignore[override]
+        super()._save_to_state_dict(destination, prefix, keep_vars)
+        for name in self._NON_SERIALIZED_BUFFERS:
+            destination.pop(f"{prefix}{name}", None)
+
+    def _load_from_state_dict(  # type: ignore[override]
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ) -> None:
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+        for name in self._NON_SERIALIZED_BUFFERS:
+            key = f"{prefix}{name}"
+            if key in missing_keys:
+                missing_keys.remove(key)
+
+    def named_buffers(  # type: ignore[override]
+        self,
+        prefix: str = "",
+        recurse: bool = True,
+        remove_duplicate: bool = True,
+    ):
+        for name, buffer in super().named_buffers(
+            prefix=prefix, recurse=recurse, remove_duplicate=remove_duplicate
+        ):
+            local_name = name.split(".")[-1]
+            if local_name in self._NON_SERIALIZED_BUFFERS:
+                continue
+            yield name, buffer
 
 
 class FLoCoRAConv2dAdapter(_BaseAdapter):
@@ -257,25 +346,31 @@ def _replace_module(root: nn.Module, module_name: str, new_module: nn.Module) ->
 
 
 def wrap_efficientnet_with_adapters(model: nn.Module, lora_config) -> nn.Module:
-    target_names = list(_iter_target_names(lora_config))
-    if not target_names:
-        return model
-    alpha = getattr(lora_config, "alpha", 1.0)
-    modules = list(model.named_modules())
-    target_set = set(target_names)
-    for name, module in modules:
-        if name not in target_set:
-            continue
-        if isinstance(module, FLoCoRAConv2dAdapter) or isinstance(module, FLoCoRALinearAdapter):
-            continue
-        rank = _resolve_rank(lora_config, name)
-        if rank <= 0:
-            continue
-        if isinstance(module, nn.Conv2d):
-            adapter = FLoCoRAConv2dAdapter.from_conv(module, rank=rank, alpha=alpha)
-        elif isinstance(module, nn.Linear):
-            adapter = FLoCoRALinearAdapter.from_linear(module, rank=rank, alpha=alpha)
-        else:
-            continue
-        _replace_module(model, name, adapter)
+    target_names = tuple(_iter_target_names(lora_config))
+    modules_to_save = _normalize_module_names(getattr(lora_config, "modules_to_save", None))
+
+    if target_names:
+        alpha = getattr(lora_config, "alpha", 1.0)
+        modules = list(model.named_modules())
+        target_set = set(target_names)
+        for name, module in modules:
+            if name not in target_set:
+                continue
+            if isinstance(module, (FLoCoRAConv2dAdapter, FLoCoRALinearAdapter)):
+                continue
+            rank = _resolve_rank(lora_config, name)
+            if rank <= 0:
+                continue
+            if isinstance(module, nn.Conv2d):
+                adapter = FLoCoRAConv2dAdapter.from_conv(module, rank=rank, alpha=alpha)
+            elif isinstance(module, nn.Linear):
+                adapter = FLoCoRALinearAdapter.from_linear(module, rank=rank, alpha=alpha)
+            else:
+                continue
+            _replace_module(model, name, adapter)
+
+    if target_names or modules_to_save:
+        _apply_peft_freezing(model, modules_to_save)
+    setattr(model, "_flocora_target_modules", tuple(dict.fromkeys(target_names)))
+    setattr(model, "_flocora_modules_to_save", modules_to_save)
     return model
