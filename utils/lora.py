@@ -2,6 +2,7 @@ import copy
 import math
 from collections import OrderedDict
 from types import MethodType
+from typing import Set
 
 import numpy as np
 import torch
@@ -20,6 +21,7 @@ from utils.dcs import LoraInfo
 from utils.flocora_adapters import (
     FLoCoRAConv2dAdapter,
     FLoCoRALinearAdapter,
+    _parameter_belongs_to_module,
     wrap_efficientnet_with_adapters,
 )
 
@@ -28,10 +30,30 @@ def _is_peft_model(model: nn.Module) -> bool:
     return hasattr(model, "peft_config") and hasattr(model, "base_model")
 
 
-def _iter_adapter_parameters(model: nn.Module):
+def _iter_adapter_tensors(model: nn.Module):
+    modules_to_save = getattr(model, "_flocora_modules_to_save", ())
+    if modules_to_save is None:
+        modules_to_save = ()
+    yielded: Set[str] = set()
+
     for name, parameter in model.named_parameters():
         if "lora_" in name:
+            yielded.add(name)
             yield name, parameter
+            continue
+
+        if any(_parameter_belongs_to_module(name, module) for module in modules_to_save):
+            yielded.add(name)
+            yield name, parameter
+
+    if not modules_to_save:
+        return
+
+    for name, buffer in model.named_buffers():
+        if name in yielded:
+            continue
+        if any(_parameter_belongs_to_module(name, module) for module in modules_to_save):
+            yield name, buffer
 
 
 def _ensure_trainable_api(model: nn.Module) -> nn.Module:
@@ -107,8 +129,8 @@ def get_lora_params(lora_model):
         return [val.cpu().numpy() for _, val in state_dict.items()]
 
     adapter_state = OrderedDict(
-        (name, param.detach().cpu().clone())
-        for name, param in _iter_adapter_parameters(lora_model)
+        (name, tensor.detach().cpu().clone())
+        for name, tensor in _iter_adapter_tensors(lora_model)
     )
     return [tensor.numpy() for tensor in adapter_state.values()]
 
@@ -122,13 +144,16 @@ def set_lora_params(lora_model, adapter_params):
         return set_peft_model_state_dict(lora_model, state_dict)
 
     adapter_params = list(adapter_params)
-    named_params = list(_iter_adapter_parameters(lora_model))
-    if len(adapter_params) != len(named_params):
+    named_tensors = list(_iter_adapter_tensors(lora_model))
+    if len(adapter_params) != len(named_tensors):
         raise ValueError("Adapter parameter count mismatch")
 
-    for (name, parameter), values in zip(named_params, adapter_params):
-        tensor = torch.from_numpy(np.copy(values)).to(parameter.device, dtype=parameter.dtype)
-        parameter.data.copy_(tensor)
+    for (name, reference), values in zip(named_tensors, adapter_params):
+        tensor = torch.from_numpy(np.copy(values)).to(reference.device, dtype=reference.dtype)
+        if isinstance(reference, nn.Parameter):
+            reference.data.copy_(tensor)
+        else:
+            reference.copy_(tensor)
     return lora_model
 
 def singular_value(p):
