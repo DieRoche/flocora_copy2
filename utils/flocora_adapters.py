@@ -52,7 +52,11 @@ def _parameter_belongs_to_module(parameter_name: str, module_name: str) -> bool:
     return parameter_name.startswith(f"{module_name}.")
 
 
-def _apply_peft_freezing(model: nn.Module, modules_to_save: Tuple[str, ...]) -> None:
+def _apply_peft_freezing(
+    model: nn.Module,
+    modules_to_save: Tuple[str, ...],
+    parameters_to_save: Tuple[str, ...] = (),
+) -> None:
     for parameter in model.parameters():
         parameter.requires_grad = False
 
@@ -70,6 +74,13 @@ def _apply_peft_freezing(model: nn.Module, modules_to_save: Tuple[str, ...]) -> 
             continue
         for parameter in module.parameters():
             parameter.requires_grad = True
+
+    parameter_map = dict(model.named_parameters())
+    for parameter_name in parameters_to_save:
+        parameter = parameter_map.get(parameter_name)
+        if parameter is None:
+            continue
+        parameter.requires_grad = True
 
 
 class _BaseAdapter(nn.Module):
@@ -347,11 +358,13 @@ def _replace_module(root: nn.Module, module_name: str, new_module: nn.Module) ->
 
 def wrap_efficientnet_with_adapters(model: nn.Module, lora_config) -> nn.Module:
     target_names = tuple(_iter_target_names(lora_config))
-    modules_to_save = _normalize_module_names(getattr(lora_config, "modules_to_save", None))
+    requested_modules_to_save = _normalize_module_names(getattr(lora_config, "modules_to_save", None))
+
+    modules = list(model.named_modules())
+    inserted_any_adapter = False
 
     if target_names:
         alpha = getattr(lora_config, "alpha", 1.0)
-        modules = list(model.named_modules())
         target_set = set(target_names)
         for name, module in modules:
             if name not in target_set:
@@ -368,9 +381,33 @@ def wrap_efficientnet_with_adapters(model: nn.Module, lora_config) -> nn.Module:
             else:
                 continue
             _replace_module(model, name, adapter)
+            inserted_any_adapter = True
 
-    if target_names or modules_to_save:
-        _apply_peft_freezing(model, modules_to_save)
+    current_module_map = dict(model.named_modules())
+    current_parameter_map = dict(model.named_parameters())
+    current_buffer_map = dict(model.named_buffers())
+
+    resolved_module_names = tuple(
+        dict.fromkeys(name for name in requested_modules_to_save if name in current_module_map)
+    )
+    resolved_parameter_names = tuple(
+        dict.fromkeys(name for name in requested_modules_to_save if name in current_parameter_map)
+    )
+    resolved_buffer_names = tuple(
+        dict.fromkeys(name for name in requested_modules_to_save if name in current_buffer_map)
+    )
+
+    if inserted_any_adapter or resolved_module_names or resolved_parameter_names:
+        _apply_peft_freezing(
+            model,
+            resolved_module_names,
+            resolved_parameter_names,
+        )
+
+    combined_modules_to_save = tuple(
+        dict.fromkeys(resolved_module_names + resolved_parameter_names + resolved_buffer_names)
+    )
+
     setattr(model, "_flocora_target_modules", tuple(dict.fromkeys(target_names)))
-    setattr(model, "_flocora_modules_to_save", modules_to_save)
+    setattr(model, "_flocora_modules_to_save", combined_modules_to_save)
     return model
