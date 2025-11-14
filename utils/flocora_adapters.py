@@ -31,6 +31,8 @@ def _deterministic_generator(device: torch.device) -> torch.Generator:
 class _BaseAdapter(nn.Module):
     """Shared logic for FLoCoRA adapters."""
 
+    _NON_SERIALIZED_BUFFERS: Tuple[str, ...] = ("base_weight", "base_bias")
+
     def __init__(self, alpha: float, rank: int) -> None:
         super().__init__()
         self.alpha = float(alpha)
@@ -49,6 +51,49 @@ class _BaseAdapter(nn.Module):
                     parameter.normal_(mean=0.0, std=std, generator=generator)
                 else:
                     parameter.normal_(mean=0.0, std=std, generator=generator)
+
+    def _save_to_state_dict(self, destination, prefix, keep_vars):  # type: ignore[override]
+        super()._save_to_state_dict(destination, prefix, keep_vars)
+        for name in self._NON_SERIALIZED_BUFFERS:
+            destination.pop(f"{prefix}{name}", None)
+
+    def _load_from_state_dict(  # type: ignore[override]
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ) -> None:
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+        for name in self._NON_SERIALIZED_BUFFERS:
+            key = f"{prefix}{name}"
+            if key in missing_keys:
+                missing_keys.remove(key)
+
+    def named_buffers(  # type: ignore[override]
+        self,
+        prefix: str = "",
+        recurse: bool = True,
+        remove_duplicate: bool = True,
+    ):
+        for name, buffer in super().named_buffers(
+            prefix=prefix, recurse=recurse, remove_duplicate=remove_duplicate
+        ):
+            local_name = name.split(".")[-1]
+            if local_name in self._NON_SERIALIZED_BUFFERS:
+                continue
+            yield name, buffer
 
 
 class FLoCoRAConv2dAdapter(_BaseAdapter):
