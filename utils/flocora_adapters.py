@@ -347,11 +347,15 @@ def _replace_module(root: nn.Module, module_name: str, new_module: nn.Module) ->
 
 def wrap_efficientnet_with_adapters(model: nn.Module, lora_config) -> nn.Module:
     target_names = tuple(_iter_target_names(lora_config))
-    modules_to_save = _normalize_module_names(getattr(lora_config, "modules_to_save", None))
+    requested_modules_to_save = _normalize_module_names(getattr(lora_config, "modules_to_save", None))
+
+    modules = list(model.named_modules())
+    module_map = dict(modules)
+
+    inserted_any_adapter = False
 
     if target_names:
         alpha = getattr(lora_config, "alpha", 1.0)
-        modules = list(model.named_modules())
         target_set = set(target_names)
         for name, module in modules:
             if name not in target_set:
@@ -368,9 +372,15 @@ def wrap_efficientnet_with_adapters(model: nn.Module, lora_config) -> nn.Module:
             else:
                 continue
             _replace_module(model, name, adapter)
+            inserted_any_adapter = True
 
-    if target_names or modules_to_save:
-        _apply_peft_freezing(model, modules_to_save)
+    resolved_modules_to_save = tuple(
+        dict.fromkeys(name for name in requested_modules_to_save if name in module_map)
+    )
+
+    if inserted_any_adapter or resolved_modules_to_save:
+        _apply_peft_freezing(model, resolved_modules_to_save)
+
     setattr(model, "_flocora_target_modules", tuple(dict.fromkeys(target_names)))
-    setattr(model, "_flocora_modules_to_save", modules_to_save)
+    setattr(model, "_flocora_modules_to_save", resolved_modules_to_save)
     return model
