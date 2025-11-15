@@ -1,6 +1,8 @@
 """Adapters implementing FLoCoRA-style low-rank updates for convolution and linear layers."""
 
-from typing import Optional, Sequence, Tuple, Union
+from __future__ import annotations
+
+from typing import Iterable, Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -10,6 +12,8 @@ import torch.nn.functional as F
 __all__ = [
     "FLoCoRAConv2dAdapter",
     "FLoCoRALinearAdapter",
+    "apply_flocora_adapters",
+    "verify_equivalent_outputs",
 ]
 
 
@@ -276,4 +280,146 @@ def _resolve_rank(lora_config, module_name: str) -> int:
     except (TypeError, ValueError):
         fallback = 0
     return fallback if fallback > 0 else 0
+
+
+def _iter_named_modules_with_parents(
+    module: nn.Module, prefix: str = ""
+) -> Iterable[tuple[nn.Module, str, nn.Module, str]]:
+    """Yield ``(parent, name, child, qualified_name)`` for all children recursively."""
+
+    for name, child in module.named_children():
+        qualified_name = f"{prefix}.{name}" if prefix else name
+        yield module, name, child, qualified_name
+        yield from _iter_named_modules_with_parents(child, qualified_name)
+
+
+def _should_consider_module(
+    module_name: str,
+    module: nn.Module,
+    *,
+    target_modules: Optional[set[str]],
+    modules_to_save: set[str],
+) -> bool:
+    if module_name in modules_to_save:
+        return False
+    if any(module_name.startswith(f"{saved}.") for saved in modules_to_save):
+        return False
+    if isinstance(module, (FLoCoRAConv2dAdapter, FLoCoRALinearAdapter)):
+        return False
+    if target_modules is not None and module_name not in target_modules:
+        return False
+    return True
+
+
+def apply_flocora_adapters(
+    model: nn.Module,
+    lora_config,
+    *,
+    wrap_linear: bool = False,
+) -> nn.Module:
+    """Replace Conv2d/Linear layers with FLoCoRA adapters according to ``lora_config``.
+
+    Args:
+        model: The module whose submodules should be wrapped.
+        lora_config: Configuration object providing ``alpha``, ``r``, ``target_modules``
+            and optionally ``rank_pattern`` to control the injected ranks.
+        wrap_linear: Whether ``nn.Linear`` layers should be considered for wrapping when
+            they are not explicitly enumerated in ``target_modules``.
+
+    Returns:
+        The model with eligible layers swapped for adapter equivalents. The function
+        mutates ``model`` in-place and also stores ``modules_to_save`` on the root module
+        for downstream utilities.
+    """
+
+    if model is None:
+        raise ValueError("model cannot be None when applying FLoCoRA adapters")
+
+    alpha = float(getattr(lora_config, "alpha", 1.0) or 1.0)
+    target_modules = getattr(lora_config, "target_modules", None)
+    if target_modules:
+        target_set: Optional[set[str]] = set(target_modules)
+    else:
+        rank_pattern = getattr(lora_config, "rank_pattern", None)
+        if isinstance(rank_pattern, dict) and rank_pattern:
+            target_set = set(rank_pattern.keys())
+        else:
+            target_set = None
+
+    modules_to_save = set(getattr(lora_config, "modules_to_save", []) or [])
+    replaced_modules: list[str] = []
+
+    # Snapshot traversal order before mutating the module tree.
+    traversal = list(_iter_named_modules_with_parents(model))
+
+    for parent, child_name, child_module, qualified_name in traversal:
+        if not _should_consider_module(
+            qualified_name,
+            child_module,
+            target_modules=target_set,
+            modules_to_save=modules_to_save,
+        ):
+            continue
+
+        rank = _resolve_rank(lora_config, qualified_name)
+        if rank <= 0:
+            continue
+
+        if isinstance(child_module, nn.Conv2d):
+            adapter = FLoCoRAConv2dAdapter.from_conv(
+                child_module,
+                rank=rank,
+                alpha=alpha,
+            )
+            setattr(parent, child_name, adapter)
+            replaced_modules.append(qualified_name)
+            continue
+
+        allow_linear = wrap_linear or (target_set is not None and qualified_name in target_set)
+        if allow_linear and isinstance(child_module, nn.Linear):
+            adapter = FLoCoRALinearAdapter.from_linear(
+                child_module,
+                rank=rank,
+                alpha=alpha,
+            )
+            setattr(parent, child_name, adapter)
+            replaced_modules.append(qualified_name)
+
+    setattr(model, "_flocora_modules_to_save", tuple(sorted(modules_to_save)))
+    setattr(model, "_flocora_replaced_modules", tuple(sorted(replaced_modules)))
+    return model
+
+
+def verify_equivalent_outputs(
+    original: nn.Module,
+    wrapped: nn.Module,
+    sample_input: torch.Tensor,
+    *,
+    rtol: float = 1e-5,
+    atol: float = 1e-7,
+) -> bool:
+    """Return ``True`` if the wrapped layer matches the original for ``sample_input``.
+
+    The function runs both modules in evaluation mode without gradient tracking. It is
+    intended for lightweight smoke tests verifying the replacement pipeline.
+    """
+
+    if original is None or wrapped is None:
+        raise ValueError("original and wrapped modules must be provided")
+
+    original_mode = original.training
+    wrapped_mode = wrapped.training
+
+    try:
+        original.eval()
+        wrapped.eval()
+        with torch.no_grad():
+            reference = original(sample_input)
+            candidate = wrapped(sample_input)
+        if isinstance(reference, torch.Tensor) and isinstance(candidate, torch.Tensor):
+            return torch.allclose(candidate, reference, rtol=rtol, atol=atol)
+        return False
+    finally:
+        original.train(original_mode)
+        wrapped.train(wrapped_mode)
 
