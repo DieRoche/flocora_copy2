@@ -82,6 +82,9 @@ def model_selection(model):
     elif(model_name == "shufflenetv2"):
         from models.shufflenetv2 import shufflenetv2
         fn_model = shufflenetv2
+    elif(model_name == "efficientnet_b0"):
+        from models.effnet import efficientnet_b0
+        fn_model = efficientnet_b0
     elif(model_name == "qresnet8"):
         from models.qresnets import QResNet8       
         fn_model = QResNet8
