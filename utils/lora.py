@@ -18,11 +18,7 @@ from peft import (
 from torch.nn.init import orthogonal_
 
 from utils.dcs import LoraInfo
-from utils.flocora_adapters import (
-    FLoCoRAConv2dAdapter,
-    FLoCoRALinearAdapter,
-    _parameter_belongs_to_module,
-)
+from utils.flocora_adapters import apply_flocora_adapters, _parameter_belongs_to_module
 
 
 def _is_peft_model(model: nn.Module) -> bool:
@@ -107,6 +103,14 @@ def inject_low_rank(model, lora_config: LoraInfo):
             modules_to_save=modules_to_save,
             rank_pattern=rank_pattern,
         )
+    elif lora_type == "flocora":
+        wrap_linear = bool(getattr(lora_config, "wrap_linear", False))
+        wrapped = apply_flocora_adapters(
+            model,
+            lora_config,
+            wrap_linear=wrap_linear,
+        )
+        return _ensure_trainable_api(wrapped)
     else:
         return _ensure_trainable_api(model)
 
