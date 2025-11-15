@@ -30,7 +30,12 @@ def create_parser():
     # The string provided here is resolved through ``utils.models.model_selection``;
     # ``resnet18`` maps to the CIFAR-oriented implementation defined in
     # ``models.resnets.CifarResNet18`` that mirrors the user's reference model.
-    parser.add_argument("--model", type = str, default='effnet',help="model to use (resnet18, resnet20,qresnet12)")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="efficientnet_b0",
+        help="model to use (efficientnet_b0, resnet18, resnet20, qresnet12)",
+    )
     parser.add_argument("--feature_maps", type=int, default=16,help="number of feature maps for the model")
     parser.add_argument("--batchn", action="store_true",help="to use batch norm or group norm")
 
