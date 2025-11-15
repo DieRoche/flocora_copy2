@@ -15,7 +15,7 @@ def create_parser():
     parser.add_argument("--alpha",type=float, default=0.5,help="alpha used for LDA")
     parser.add_argument("--alpha_inf",action="store_true",help="special flag to use alpha as infinity") # uniform
     parser.add_argument("--val_ratio", type=float, default=0.2,help="validationd dataset split")
-    parser.add_argument("--dataset", type = str, default='cifar10',help="which dataset to use")
+    parser.add_argument("--dataset", type = str, default='cifar100',help="which dataset to use")
     parser.add_argument("--samp_rate", type=float, default=0.5,help="client's sample rate")
     parser.add_argument("--strategy", type = str, default='fedlora',help="which strategy to use")
     parser.add_argument("--fedbn", action="store_true",help="fed bn strategy for local batchnorm")
@@ -28,13 +28,9 @@ def create_parser():
 
     ## Model
     # The string provided here is resolved through ``utils.models.model_selection``;
-    # for example ``resnet18`` maps to ``models.resnets.CifarResNet18``.
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="resnet18",
-        help="model to use (resnet18, resnet20, qresnet12, vgg11, mobilenetv2, ...)",
-    )
+    # ``resnet18`` maps to the CIFAR-oriented implementation defined in
+    # ``models.resnets.CifarResNet18`` that mirrors the user's reference model.
+    parser.add_argument("--model", type = str, default='effnet',help="model to use (resnet18, resnet20,qresnet12)")
     parser.add_argument("--feature_maps", type=int, default=16,help="number of feature maps for the model")
     parser.add_argument("--batchn", action="store_true",help="to use batch norm or group norm")
 
