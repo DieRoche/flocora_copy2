@@ -206,6 +206,14 @@ def gen_rank_pattern(model,r,mode=3,ratio=0):
     for name,m in model.named_modules():
 
         if isinstance(m,target_instances):
+            if isinstance(m, torch.nn.Conv2d) and getattr(m, "groups", 1) > 1:
+                # Depthwise or grouped convolutions cannot be merged back from LoRA adapters.
+                # Keep them trainable by registering them as saved modules instead of targeting
+                # them for LoRA.
+                if name not in modules_to_save:
+                    modules_to_save.append(name)
+                continue
+
             target_modules.append(name)
             if ratio > 0.0 and isinstance(m,(torch.nn.Conv2d)):
                 out_channels = m.out_channels

@@ -77,6 +77,24 @@ class MBConvConfig:
 class MBConv(nn.Module):
     """Mobile Inverted Bottleneck with Squeeze-Excite."""
 
+    @staticmethod
+    def _make_depthwise_conv(channels: int, kernel_size: int, stride: int) -> nn.Conv2d:
+        """Return a depthwise convolution with one group per channel."""
+
+        if channels <= 0:
+            raise ValueError("depthwise convolution requires a positive channel count")
+
+        groups = channels
+        return nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=kernel_size // 2,
+            groups=groups,
+            bias=False,
+        )
+
     def __init__(
         self,
         in_ch: int,
@@ -102,16 +120,9 @@ class MBConv(nn.Module):
             layers = []
 
         layers = list(layers)
+        depthwise_conv = self._make_depthwise_conv(mid_ch, cfg.kernel_size, cfg.stride)
         layers += [
-            nn.Conv2d(
-                mid_ch,
-                mid_ch,
-                kernel_size=cfg.kernel_size,
-                stride=cfg.stride,
-                padding=cfg.kernel_size // 2,
-                groups=mid_ch,
-                bias=False,
-            ),
+            depthwise_conv,
             _make_norm(mid_ch, batchn),
             nn.SiLU(inplace=True),
         ]
