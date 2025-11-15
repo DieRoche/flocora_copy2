@@ -262,7 +262,6 @@ class EfficientNetB0CIFAR(nn.Module):
         )
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.dropout = nn.Dropout(p=drop_rate) if drop_rate > 0 else nn.Identity()
         self.classifier = nn.Linear(self.head_channels, num_classes)
 
         self.features_dim = self.head_channels
@@ -287,7 +286,6 @@ class EfficientNetB0CIFAR(nn.Module):
         x = self.features(x)
         x = self.avgpool(x)
         features = torch.flatten(x, 1)
-        features = self.dropout(features)
         logits = self.classifier(features)
         return logits, features
 
