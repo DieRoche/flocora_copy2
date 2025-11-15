@@ -185,7 +185,7 @@ class EfficientNetB0CIFAR(nn.Module):
         )
         stem_norm = _make_norm(self.stem_out, batchn)
         stem_act = nn.SiLU(inplace=True)
-        self.stem = nn.Sequential(
+        stem = nn.Sequential(
             OrderedDict(
                 (
                     ("conv", stem_conv),
@@ -205,15 +205,16 @@ class EfficientNetB0CIFAR(nn.Module):
             MBConvConfig(6, 320, 1, 1, 3),
         ]
 
-        block_modules: List[Tuple[str, nn.Module]] = []
+        stage_modules: List[Tuple[str, nn.Module]] = []
         stage_in_channels = self.stem_out
         total_blocks = sum(cfg.num_blocks for cfg in base_cfgs)
         drop_increment = drop_rate / total_blocks if total_blocks > 0 else 0.0
         block_id = 0
-        for cfg in base_cfgs:
+        for stage_idx, cfg in enumerate(base_cfgs):
             scaled_out = scale_channels(cfg.out_channels)
-            for i in range(cfg.num_blocks):
-                stride = cfg.stride if i == 0 else 1
+            stage_block_modules: List[Tuple[str, nn.Module]] = []
+            for block_idx in range(cfg.num_blocks):
+                stride = cfg.stride if block_idx == 0 else 1
                 block_cfg = MBConvConfig(
                     cfg.expand_ratio,
                     scaled_out,
@@ -230,10 +231,13 @@ class EfficientNetB0CIFAR(nn.Module):
                     se_ratio=se_ratio,
                     drop_rate=drop_p,
                 )
-                block_modules.append((f"mbconv{len(block_modules)}", block))
+                stage_block_modules.append((f"block{block_idx}", block))
                 stage_in_channels = scaled_out
 
-        self.blocks = nn.Sequential(OrderedDict(block_modules))
+            stage = nn.Sequential(OrderedDict(stage_block_modules))
+            stage_modules.append((f"layer{stage_idx}", stage))
+
+        blocks = nn.Sequential(OrderedDict(stage_modules))
 
         self.head_channels = scale_channels(1280)
         head_conv = nn.Conv2d(
@@ -241,7 +245,7 @@ class EfficientNetB0CIFAR(nn.Module):
         )
         head_norm = _make_norm(self.head_channels, batchn)
         head_act = nn.SiLU(inplace=True)
-        self.head = nn.Sequential(
+        head = nn.Sequential(
             OrderedDict(
                 (
                     ("conv", head_conv),
@@ -251,12 +255,34 @@ class EfficientNetB0CIFAR(nn.Module):
             )
         )
 
+        # ------------------------------------------------------------------
+        # Align the sequential layout with ResNet-style backbones
+        # ------------------------------------------------------------------
+        # ``embed`` mirrors the initial convolutional stem, ``layers`` gathers
+        # the Mobile Inverted Bottlenecks and ``top`` corresponds to the
+        # 1x1 projection preceding global pooling.  ResNet-based backbones
+        # expose the same conceptual stages (``embed``/``layers``/``fc``), and
+        # several pipeline utilities discover those attributes dynamically when
+        # they prepare backbone traversals.  Under Ray these lookups happen in
+        # worker processes, so missing attributes translate into ``AttributeError``
+        # exceptions that surface as "killed" clients.  Keeping the previous
+        # attribute names (``stem``/``blocks``/``head``) as aliases lets older
+        # checkpoints load unchanged while Ray gets the ResNet-style handles it
+        # expects.
+        self.embed = stem
+        self.layers = blocks
+        self.top = head
+
+        self.stem = self.embed
+        self.blocks = self.layers
+        self.head = self.top
+
         self.features = nn.Sequential(
             OrderedDict(
                 (
-                    ("stem", self.stem),
-                    ("blocks", self.blocks),
-                    ("head", self.head),
+                    ("stem", self.embed),
+                    ("blocks", self.layers),
+                    ("head", self.top),
                 )
             )
         )
@@ -283,7 +309,9 @@ class EfficientNetB0CIFAR(nn.Module):
                 nn.init.zeros_(m.bias)
 
     def forward(self, x: torch.Tensor):
-        x = self.features(x)
+        x = self.embed(x)
+        x = self.layers(x)
+        x = self.top(x)
         x = self.avgpool(x)
         features = torch.flatten(x, 1)
         logits = self.classifier(features)
