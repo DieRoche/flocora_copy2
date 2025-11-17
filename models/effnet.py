@@ -29,24 +29,15 @@ __all__ = ["efficientnet_b0"]
 # Utility helpers
 # ---------------------------------------------------------------------------
 
-def _select_group_norm_groups(num_channels: int) -> int:
-    """Return a valid GroupNorm group count for ``num_channels``.
-
-    EfficientNet channel sizes are divisible by 8, so iterating over a few
-    common divisors ensures we find a valid group count quickly.
-    """
-
-    for candidate in (32, 16, 8, 4, 2, 1):
-        if num_channels % candidate == 0 and candidate <= num_channels:
-            return candidate
-    return 1
-
-
 def _make_norm(num_channels: int, batchn: bool) -> nn.Module:
     if batchn:
         return nn.BatchNorm2d(num_channels)
-    groups = _select_group_norm_groups(num_channels)
-    return nn.GroupNorm(groups, num_channels)
+    if num_channels % 2 != 0:
+        raise ValueError(
+            "GroupNorm with 2 groups requires an even channel count; "
+            "consider adjusting feature_maps or enabling batch normalization."
+        )
+    return nn.GroupNorm(2, num_channels)
 
 
 class SqueezeExcite(nn.Module):
@@ -79,12 +70,12 @@ class MBConv(nn.Module):
 
     @staticmethod
     def _make_depthwise_conv(channels: int, kernel_size: int, stride: int) -> nn.Conv2d:
-        """Return a depthwise convolution with one group per channel."""
+        """Return a channel-preserving convolution with standard grouping."""
 
         if channels <= 0:
-            raise ValueError("depthwise convolution requires a positive channel count")
+            raise ValueError("convolution requires a positive channel count")
 
-        groups = channels
+        groups = 1
         return nn.Conv2d(
             channels,
             channels,
