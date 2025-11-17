@@ -15,8 +15,8 @@ def create_parser():
     parser.add_argument("--alpha",type=float, default=0.5,help="alpha used for LDA")
     parser.add_argument("--alpha_inf",action="store_true",help="special flag to use alpha as infinity") # uniform
     parser.add_argument("--val_ratio", type=float, default=0.2,help="validationd dataset split")
-    parser.add_argument("--dataset", type = str, default='cifar10',help="which dataset to use")
-    parser.add_argument("--samp_rate", type=float, default=1.0,help="client's sample rate")
+    parser.add_argument("--dataset", type = str, default='cifar100',help="which dataset to use")
+    parser.add_argument("--samp_rate", type=float, default=0.5,help="client's sample rate")
     parser.add_argument("--strategy", type = str, default='fedlora',help="which strategy to use")
     parser.add_argument("--fedbn", action="store_true",help="fed bn strategy for local batchnorm")
     parser.add_argument("--drop_random", action="store_true",help="drop client's results with random guess")
