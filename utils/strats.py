@@ -197,7 +197,7 @@ class Evaluate:
         self.args = args
         self.test_loader = DataLoader(
             test_set,
-            batch_size=256,
+            batch_size=args.cl_bs,
             shuffle=False,
             pin_memory=True,
             num_workers=args.nworkers,
@@ -238,7 +238,7 @@ class EvaluateLora:
         self.args = args
         self.test_loader = DataLoader(
             test_set,
-            batch_size=256,
+            batch_size=args.cl_bs,
             shuffle=False,
             pin_memory=True,
             num_workers=args.nworkers,
@@ -293,7 +293,7 @@ def get_evaluate_fn(model, test_set, device, args: Namespace):
 
     test_loader = DataLoader(
         test_set,
-        batch_size=256,
+        batch_size=args.cl_bs,
         shuffle=False,
         pin_memory=True,
         num_workers=args.nworkers,
