@@ -77,6 +77,11 @@ def create_parser():
         default=5.0,
         help="Number of CPUs each Ray client reserves during simulation",
     )
+    parser.add_argument(
+        "--sequential_clients",
+        action="store_true",
+        help="Force Ray to schedule only one client at a time by reserving all available resources per client",
+    )
 
     ##Lora
     parser.add_argument("--lora_alpha", type=int,default=16,help="alpha parameter in a lora adapter")
