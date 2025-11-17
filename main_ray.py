@@ -331,6 +331,14 @@ if __name__ == "__main__":
     )
     est_parallel_clients = int(math.floor(min(max_parallel_by_cpu, max_parallel_by_gpu)))
 
+    max_parallel_by_cpu = (
+        total_cpus / per_client_cpus if per_client_cpus > 0 else float("inf")
+    )
+    max_parallel_by_gpu = (
+        visible_gpus / per_client_gpus if per_client_gpus > 0 else float("inf")
+    )
+    est_parallel_clients = int(math.floor(min(max_parallel_by_cpu, max_parallel_by_gpu)))
+
     logger.debug(f"Client resources resolved to: {client_resources}")
     logger.info(
         "Sequential client scheduling is %s; Ray will run approximately %s client(s) in parallel.",
