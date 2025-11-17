@@ -184,17 +184,9 @@ def gen_rank_pattern(model,r,mode=3,ratio=0):
 
         for name, m in model.named_modules():
             if isinstance(m, torch.nn.Conv2d):
-                is_pointwise = (
-                    m.kernel_size == (1, 1)
-                    and m.groups == 1
-                )
-
-                is_depthwise = (
-                    name.startswith("stages")
-                    and m.groups == m.in_channels == m.out_channels
-                )
-
-                if name.startswith("stages") and (is_pointwise or is_depthwise):
+                # Only target standard convolutions inside the EfficientNet stages;
+                # skip depthwise layers (groups > 1).
+                if name.startswith("stages") and m.groups == 1:
                     target_modules.append(name)
                     if ratio > 0.0:
                         out_channels = m.out_channels
