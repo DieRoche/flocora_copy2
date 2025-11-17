@@ -3,7 +3,7 @@ from utils.utils import FlInfo, Info
 import torch.multiprocessing as mp
 mp.set_start_method('spawn',force=True)
 import copy
-from utils.mp_utils import mp_fit
+from utils.mp_utils import mp_fit, cleanup_memory
 
 class FlowerClient(fl.client.NumPyClient):
     def __init__(self, info: Info, fl_info: FlInfo):
@@ -49,6 +49,7 @@ class FlowerClient(fl.client.NumPyClient):
         # if(self.lr_sched is not None):
         #     self.lr_sched.step()
         metrics["cid"] = self.fl_info.cid
+        cleanup_memory()
         return params, size, metrics
 
     def _new_child(self, mp_func, config, parameters):
