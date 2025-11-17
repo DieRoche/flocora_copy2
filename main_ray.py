@@ -289,11 +289,15 @@ if __name__ == "__main__":
         # available. Cap the request to the host's visible resources.
         per_client_cpus = min(5.0, float(total_cpus))
         per_client_gpus = 0.0
+        ray_gpus = 0.0
         if not args.only_cpu and visible_gpus > 0:
             per_client_gpus = min(0.7, float(visible_gpus))
+            # Ray init requires whole GPUs; reserve one while letting clients
+            # consume only a 0.7 fraction during scheduling.
+            ray_gpus = min(1.0, float(visible_gpus))
         ray_init_args.update({
             "num_cpus": per_client_cpus,
-            "num_gpus": per_client_gpus,
+            "num_gpus": ray_gpus,
         })
     else:
         per_client_cpus = max(0.0, float(args.ray_cpu))
