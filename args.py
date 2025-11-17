@@ -78,6 +78,30 @@ def create_parser():
         help="Number of CPUs each Ray client reserves during simulation",
     )
     parser.add_argument(
+        "--ray_max_restarts",
+        type=int,
+        default=1,
+        help="Ray actor restart budget to tolerate OOM-triggered worker restarts",
+    )
+    parser.add_argument(
+        "--ray_max_task_retries",
+        type=int,
+        default=3,
+        help="Ray task retry budget to recover from transient OOM terminations",
+    )
+    parser.add_argument(
+        "--ray_memory_usage_threshold",
+        type=float,
+        default=None,
+        help="Override Ray's memory kill threshold (0-1 fraction of node memory)",
+    )
+    parser.add_argument(
+        "--ray_memory_monitor_refresh_ms",
+        type=int,
+        default=None,
+        help="Set to 0 to disable Ray's worker memory killer or increase the refresh interval",
+    )
+    parser.add_argument(
         "--sequential_clients",
         action="store_true",
         help="Force Ray to schedule only one client at a time by reserving all available resources per client",

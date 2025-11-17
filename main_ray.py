@@ -1,5 +1,6 @@
 import math
 import multiprocessing
+import os
 from argparse import Namespace
 from typing import Optional
 
@@ -280,6 +281,14 @@ if __name__ == "__main__":
 
     # (optional) specify Ray config
     ray_init_args = {"include_dashboard": False}
+
+    if args.ray_memory_usage_threshold is not None:
+        os.environ["RAY_memory_usage_threshold"] = str(args.ray_memory_usage_threshold)
+
+    if args.ray_memory_monitor_refresh_ms is not None:
+        os.environ["RAY_memory_monitor_refresh_ms"] = str(
+            args.ray_memory_monitor_refresh_ms
+        )
     total_cpus = max(1, multiprocessing.cpu_count())
     visible_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
 
@@ -318,7 +327,20 @@ if __name__ == "__main__":
                 per_client_gpus = max(0.0, float(args.ray_gpu))
             per_client_gpus = min(per_client_gpus, float(visible_gpus))
 
-    client_resources = {"num_cpus": per_client_cpus, "num_gpus": per_client_gpus}
+    client_resources = {
+        "num_cpus": per_client_cpus,
+        "num_gpus": per_client_gpus,
+        "max_restarts": max(0, int(args.ray_max_restarts)),
+        "max_task_retries": max(0, int(args.ray_max_task_retries)),
+    }
+
+    max_parallel_by_cpu = (
+        total_cpus / per_client_cpus if per_client_cpus > 0 else float("inf")
+    )
+    max_parallel_by_gpu = (
+        visible_gpus / per_client_gpus if per_client_gpus > 0 else float("inf")
+    )
+    est_parallel_clients = int(math.floor(min(max_parallel_by_cpu, max_parallel_by_gpu)))
 
     max_parallel_by_cpu = (
         total_cpus / per_client_cpus if per_client_cpus > 0 else float("inf")
@@ -333,6 +355,13 @@ if __name__ == "__main__":
         "Sequential client scheduling is %s; Ray will run approximately %s client(s) in parallel.",
         "enabled" if args.sequential_clients else "disabled",
         est_parallel_clients,
+    )
+    logger.info(
+        "Ray OOM safeguards: max_restarts=%s, max_task_retries=%s, RAY_memory_usage_threshold=%s, RAY_memory_monitor_refresh_ms=%s",
+        client_resources["max_restarts"],
+        client_resources["max_task_retries"],
+        os.environ.get("RAY_memory_usage_threshold", "default"),
+        os.environ.get("RAY_memory_monitor_refresh_ms", "default"),
     )
 
     if args.wandb:
