@@ -289,6 +289,7 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
             "nelement": value.nelement(),
         }
         for key, value in net.named_parameters()
+        if value.requires_grad
     ]
 
     optimizer = torch.optim.SGD(params, 

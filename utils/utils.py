@@ -43,20 +43,47 @@ def adjust_learning_rate(args, optimizer, len_loader, step):
         param_group['lr'] = lr
     return lr
 
-def get_tensor_parameters(model,fedbn=False):
+def _resolve_excluded_layers(model: torch.nn.Module, exclude_layers: Optional[Iterable[str]]):
+    if exclude_layers is not None:
+        return tuple(exclude_layers)
+
+    for attr in ("excluded_from_sync", "frozen_layers"):
+        layers = getattr(model, attr, None)
+        if layers is not None:
+            return tuple(layers)
+
+    return ()
+
+
+def get_tensor_parameters(model, fedbn=False, *, exclude_layers: Optional[Iterable[str]] = None):
     from flwr.common.parameter import ndarrays_to_parameters
 
     return ndarrays_to_parameters(
-        get_params(model,fedbn)
+        get_params(model, fedbn, exclude_layers=exclude_layers)
     )
 
-def get_params(model,fedbn=False):
+def get_params(model, fedbn=False, *, exclude_layers: Optional[Iterable[str]] = None):
     """Get model weights as a list of NumPy ndarrays."""
 
-    if(fedbn):
-        return [val.cpu().numpy() for name, val in model.state_dict().items() if 'bn' not in name]
+    excluded = _resolve_excluded_layers(model, exclude_layers)
+
+    def _should_skip(name: str) -> bool:
+        return any(name.startswith(prefix) for prefix in excluded)
+
+    if fedbn:
+        filtered_items = (
+            (name, val)
+            for name, val in model.state_dict().items()
+            if "bn" not in name and not _should_skip(name)
+        )
     else:
-        return [val.cpu().numpy() for _, val in model.state_dict().items()]
+        filtered_items = (
+            (name, val)
+            for name, val in model.state_dict().items()
+            if not _should_skip(name)
+        )
+
+    return [val.cpu().numpy() for _, val in filtered_items]
 
 def count_params(model,trainable = False):
     if trainable:
@@ -64,11 +91,23 @@ def count_params(model,trainable = False):
     else:
         return sum(p.numel() for p in model.parameters())
 
-def set_params(model, params, fedbn = False, bb_only = False):
+def set_params(
+    model,
+    params,
+    fedbn=False,
+    bb_only=False,
+    *,
+    exclude_layers: Optional[Iterable[str]] = None,
+):
     """Set model weights from a list of NumPy   ndarrays."""
-    
+
     # keys = model.state_dict().keys()
-    
+
+    excluded = _resolve_excluded_layers(model, exclude_layers)
+
+    def _should_skip(name: str) -> bool:
+        return any(name.startswith(prefix) for prefix in excluded)
+
     if(bb_only):
         keys = model.state_dict().keys()
         params_dict = dict(zip(keys, params))
@@ -78,17 +117,17 @@ def set_params(model, params, fedbn = False, bb_only = False):
 
         model.load_state_dict(state_dict, strict=False)
     elif(fedbn):
-        keys = [k for k in model.state_dict().keys() if 'bn' not in k]
+        keys = [k for k in model.state_dict().keys() if 'bn' not in k and not _should_skip(k)]
         params_dict = zip(keys, params)
         state_dict = OrderedDict({k: torch.from_numpy(np.copy(v)) for k, v in params_dict})
 
         model.load_state_dict(state_dict, strict=False)
     else:
-        keys = model.state_dict().keys()
+        keys = [k for k in model.state_dict().keys() if not _should_skip(k)]
         params_dict = zip(keys, params)
         state_dict = OrderedDict({k: torch.from_numpy(np.copy(v)) for k, v in params_dict})
 
-        model.load_state_dict(state_dict, strict=True)
+        model.load_state_dict(state_dict, strict=len(excluded) == 0)
 
 
 def pile_str(line, item):
