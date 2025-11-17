@@ -284,10 +284,21 @@ if __name__ == "__main__":
     visible_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
 
     if args.sequential_clients:
-        per_client_cpus = float(total_cpus)
-        per_client_gpus = (
-            0.0 if args.only_cpu or visible_gpus == 0 else float(visible_gpus)
-        )
+        # Explicitly constrain each client to the requested fractions so that
+        # Ray schedules only one client at a time even when multiple are
+        # available. Cap the request to the host's visible resources.
+        per_client_cpus = min(5.0, float(total_cpus))
+        per_client_gpus = 0.0
+        ray_gpus = 0.0
+        if not args.only_cpu and visible_gpus > 0:
+            per_client_gpus = min(0.7, float(visible_gpus))
+            # Ray init requires whole GPUs; reserve one while letting clients
+            # consume only a 0.7 fraction during scheduling.
+            ray_gpus = min(1.0, float(visible_gpus))
+        ray_init_args.update({
+            "num_cpus": per_client_cpus,
+            "num_gpus": ray_gpus,
+        })
     else:
         per_client_cpus = max(0.0, float(args.ray_cpu))
         if per_client_cpus == 0.0:
