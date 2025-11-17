@@ -133,6 +133,10 @@ class EfficientNetB0_CIFAR(nn.Module):
     ) -> None:
         super().__init__()
         self.in_channels = 32
+        # Layers that should be excluded from federated parameter exchange while
+        # remaining fully trainable locally.
+        self.excluded_from_sync = ("conv1", "conv_head")
+        self.frozen_layers = self.excluded_from_sync
 
         # Stem: 3x3 conv, stride=1 for 32x32 inputs (CIFAR)
         self.conv1 = nn.Conv2d(3, self.in_channels, kernel_size=3, stride=1, padding=1, bias=False)
