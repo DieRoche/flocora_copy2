@@ -130,10 +130,28 @@ def get_random_id_splits(total, val_ratio, shuffle=True):
 def do_fl_partitioning(
     path_to_dataset, pool_size, alpha, num_classes, val_ratio=0.0, seed=1234, is_cinic = False
 ):
+    def _load_dataset(path, encoding=None):
+        """Load serialized dataset tensors across PyTorch versions.
+
+        PyTorch >=2.6 defaults ``weights_only=True``, which breaks loading
+        legacy dataset files saved as generic Python objects. We explicitly set
+        ``weights_only=False`` for trusted local dataset artifacts.
+        """
+
+        load_kwargs = {}
+        if encoding is not None:
+            load_kwargs["encoding"] = encoding
+
+        try:
+            return torch.load(path, weights_only=False, **load_kwargs)
+        except TypeError:
+            # ``weights_only`` is unavailable in older PyTorch versions.
+            return torch.load(path, **load_kwargs)
+
     if is_cinic:
-        images, labels = torch.load(path_to_dataset)
+        images, labels = _load_dataset(path_to_dataset)
     else :
-        images, labels = torch.load(path_to_dataset, encoding="latin1")
+        images, labels = _load_dataset(path_to_dataset, encoding="latin1")
 
     idx = np.array(range(len(images)))
     dataset = [idx, labels]
@@ -207,7 +225,10 @@ class TorchVision_FL(VisionDataset):
 
         if path_to_data:
             # load data and targets (path_to_data points to an specific .pt file)
-            self.data, self.targets = torch.load(path_to_data)
+            try:
+                self.data, self.targets = torch.load(path_to_data, weights_only=False)
+            except TypeError:
+                self.data, self.targets = torch.load(path_to_data)
         else:
             self.data = data
             self.targets = targets
