@@ -72,6 +72,16 @@ def create_parser():
         default=5.0,
         help="Number of CPUs each Ray client reserves during simulation",
     )
+    parser.add_argument(
+        "--ray_max_concurrency",
+        type=int,
+        default=0,
+        help=(
+            "Maximum number of client actors to run concurrently in Ray. "
+            "When set (>0), the launcher derives a larger per-client CPU reservation "
+            "to cap concurrency and reduce memory pressure."
+        ),
+    )
 
     ##Lora
     parser.add_argument("--lora_alpha", type=int,default=16,help="alpha parameter in a lora adapter")
