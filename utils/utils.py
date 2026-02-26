@@ -95,6 +95,35 @@ def pile_str(line, item):
     return "_".join([line, item])
 
 
+def resolve_wandb_run_name(runtime_args: Namespace) -> str:
+    """Build the standardized W&B run name.
+
+    Format: ``Flocora_<dataset>_<model_family>_<clients_per_round>cl``.
+    """
+
+    dataset_name = str(getattr(runtime_args, "dataset", "unknown")).lower()
+    model_name = str(getattr(runtime_args, "model", "unknown")).lower()
+
+    if "resnet" in model_name:
+        model_family = "resnet"
+    elif "effnet" in model_name or "efficientnet" in model_name:
+        model_family = "effnet"
+    else:
+        model_family = model_name
+
+    try:
+        num_clients = float(getattr(runtime_args, "num_clients", 0.0))
+        sample_rate = float(getattr(runtime_args, "samp_rate", 0.0))
+    except (TypeError, ValueError):
+        num_clients = 0.0
+        sample_rate = 0.0
+
+    clients_per_round = int(round(num_clients * sample_rate))
+    clients_per_round = max(clients_per_round, 1)
+
+    return f"Flocora_{dataset_name}_{model_family}_{clients_per_round}cl"
+
+
 def aggregate_client_metrics(
     metrics: Iterable[Tuple[int, Mapping[str, object]]]
 ) -> Dict[str, float]:

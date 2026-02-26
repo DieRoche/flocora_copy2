@@ -16,6 +16,7 @@ from torch import device as torch_device
 from utils.models import do_model_pool
 from utils.dataset import import_dataset, do_fl_partitioning
 from utils.utils import *
+from utils.utils import resolve_wandb_run_name
 from utils.file_name import gen_filename
 from utils.server import *
 from log import logger, HFILE
@@ -332,6 +333,7 @@ if __name__ == "__main__":
             entity=args.entity,
             # set the wandb project where this run will be logged
             project=args.wandb_prj_name,
+            name=resolve_wandb_run_name(args),
             # track hyperparameters and run metadata
             config=args
         )

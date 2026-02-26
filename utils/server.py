@@ -6,7 +6,7 @@ import flwr as fl
 import args as args_module
 from utils.dcs import FlInfo, Info, LoraInfo, ServerInfo
 from utils.lora import *
-from utils.utils import inst_model_info
+from utils.utils import inst_model_info, resolve_wandb_run_name
 
 
 def _get_args() -> Optional[Namespace]:
@@ -31,8 +31,10 @@ def start_server(srv_addr, strategy, num_rounds, server_queue):
         import wandb
 
         wandb.init(
+            entity=args.entity,
             # set the wandb project where this run will be logged
             project=args.wandb_prj_name,
+            name=resolve_wandb_run_name(args),
             # track hyperparameters and run metadata
             config=args,
         )
