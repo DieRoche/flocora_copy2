@@ -2,6 +2,8 @@ import multiprocessing
 from argparse import Namespace
 from typing import Optional
 
+from flwr.common import Context
+
 import torch
 import torch.multiprocessing as mp
 
@@ -239,9 +241,11 @@ if __name__ == "__main__":
         exit(-1)
 
 
-    def client_fn(cid):
+    def client_fn(context: Context):
 
         from client import FlowerClient
+
+        cid = str(context.node_config["partition-id"])
         info = Info(
             model=clients_models[int(cid)],
             dataset_name=args.dataset,
@@ -262,32 +266,50 @@ if __name__ == "__main__":
             saddr=saddr,
             device=client_device,
             num_rounds=args.num_rounds,
-            cid=str(cid),
+            cid=cid,
             fed_dir=Path(fed_dir),
             no_thread=args.no_thread,
             server_model=args.model,
             prune=args.prune,
             prune_srv=args.prune_srv,
             strategy=args.strategy,
-            lora_config = lora_config,
+            lora_config=lora_config,
             nworkers=args.nworkers,
             apply_quant=args.apply_quant,
             quant_bits=args.quant_bits,
         )
 
-        return FlowerClient(info,fl_info).to_client()
+        return FlowerClient(info, fl_info).to_client()
 
     # (optional) specify Ray config
     ray_init_args = {"include_dashboard": False}
     total_cpus = max(1, multiprocessing.cpu_count())
-    per_client_cpus = max(0.0, float(args.ray_cpu))
-    if per_client_cpus == 0.0:
+    requested_per_client_cpus = max(0.0, float(args.ray_cpu))
+    if requested_per_client_cpus == 0.0:
         logger.warning(
             "Per-client CPU allocation was resolved to 0. Ray requires a positive value; "
             "falling back to reserving 1 CPU per client."
         )
-        per_client_cpus = 1.0
+        requested_per_client_cpus = 1.0
+
+    if args.ray_max_concurrency > 0:
+        target_concurrency = max(1, min(args.ray_max_concurrency, pool_size))
+        concurrency_bound_cpu = float(total_cpus) / float(target_concurrency)
+        per_client_cpus = max(requested_per_client_cpus, concurrency_bound_cpu)
+    else:
+        per_client_cpus = requested_per_client_cpus
+
     per_client_cpus = min(per_client_cpus, float(total_cpus))
+    estimated_concurrency = max(1, min(pool_size, int(float(total_cpus) / per_client_cpus)))
+    logger.info(
+        "Ray concurrency plan: requested_cpu_per_client=%.2f, effective_cpu_per_client=%.2f, "
+        "estimated_max_concurrency=%d/%d clients",
+        requested_per_client_cpus,
+        per_client_cpus,
+        estimated_concurrency,
+        pool_size,
+    )
+
     visible_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
 
     if args.only_cpu or visible_gpus == 0:
