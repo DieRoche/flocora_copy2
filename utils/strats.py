@@ -204,6 +204,7 @@ class Evaluate:
         )
         self.model = model
         self.device = device
+        self.best_server_acc = float("-inf")
 
     def __call__(self, server_round, parameters, config, to_log=None):
         set_params(self.model, parameters, self.args.fedbn)
@@ -215,6 +216,9 @@ class Evaluate:
             metrics.update(traffic_metrics)
         loss = metrics.get("test_loss")
         accuracy = metrics.get("test_acc")
+        if accuracy is not None:
+            self.best_server_acc = max(self.best_server_acc, float(accuracy))
+            metrics["acc_servers_highest"] = self.best_server_acc
         logger.info(
             f"Server round {server_round} loss : {loss:.4f} acc : {accuracy:.4f}",
             extra=HFILE,
@@ -245,6 +249,7 @@ class EvaluateLora:
         )
         self.model = model
         self.device = device
+        self.best_server_acc = float("-inf")
         self.past_a_matrix, self.past_b_matrix = extract_AB_matrix(model.state_dict())
 
     def __call__(self, server_round, parameters, config):
@@ -272,6 +277,9 @@ class EvaluateLora:
             metrics.update(traffic_metrics)
         loss = metrics.get("test_loss")
         accuracy = metrics.get("test_acc")
+        if accuracy is not None:
+            self.best_server_acc = max(self.best_server_acc, float(accuracy))
+            metrics["acc_servers_highest"] = self.best_server_acc
         logger.info(
             f"Server round {server_round} loss : {loss:.4f} acc : {accuracy:.4f}",
             extra=HFILE,
@@ -299,7 +307,10 @@ def get_evaluate_fn(model, test_set, device, args: Namespace):
         num_workers=args.nworkers,
     )
 
+    best_server_acc = float("-inf")
+
     def evaluate(server_round, parameters, config):
+        nonlocal best_server_acc
         set_params(model, parameters, args.fedbn)
         model.to(device)
         ans = test(model, test_loader, device)
@@ -309,6 +320,9 @@ def get_evaluate_fn(model, test_set, device, args: Namespace):
             metrics.update(traffic_metrics)
         loss = metrics.get("test_loss")
         accuracy = metrics.get("test_acc")
+        if accuracy is not None:
+            best_server_acc = max(best_server_acc, float(accuracy))
+            metrics["acc_servers_highest"] = best_server_acc
         logger.info(
             f"Server round {server_round} loss : {loss:.4f} acc : {accuracy:.4f}",
             extra=HFILE,
