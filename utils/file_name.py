@@ -1,22 +1,28 @@
 from argparse import Namespace
 
 
+def _simplify_model_name(model_name: str) -> str:
+    normalized = (model_name or "").strip().lower()
+    if normalized.startswith("resnet"):
+        return "resnet"
+    return normalized or "model"
+
+
+def _clients_per_round_tag(args: Namespace) -> str:
+    num_clients = max(int(getattr(args, "num_clients", 0) or 0), 0)
+    sample_rate = float(getattr(args, "samp_rate", 0.0) or 0.0)
+    clients_per_round = max(int(round(num_clients * sample_rate)), 0)
+    return f"{clients_per_round}cl"
+
+
+def gen_run_name(args: Namespace) -> str:
+    dataset = str(getattr(args, "dataset", "dataset") or "dataset").lower()
+    model = _simplify_model_name(str(getattr(args, "model", "model") or "model"))
+    return f"flocora_{dataset}_{model}_{_clients_per_round_tag(args)}"
+
+
 def gen_filename(args: Namespace):
-    from utils.utils import pile_str
-
-    file_name = ""
+    run_name = gen_run_name(args)
     if args.id_exp != "":
-        file_name = "exp_" + args.id_exp + "_"
-
-    file_name += args.model
-    file_name = pile_str(file_name, args.strategy)
-    file_name = pile_str(file_name, args.id_exp)
-    file_name = pile_str(file_name, args.dataset)
-    file_name = pile_str(file_name, "cle_" + str(args.cl_epochs))
-    if args.prune:
-        file_name = pile_str(file_name, "prune")
-        file_name = pile_str(file_name, str(args.prate))
-    if args.fedbn:
-        file_name = pile_str(file_name, "fedbn")
-
-    return file_name
+        return f"exp_{args.id_exp}_{run_name}"
+    return run_name
