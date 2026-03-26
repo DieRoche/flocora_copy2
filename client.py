@@ -38,10 +38,7 @@ class FlowerClient(fl.client.NumPyClient):
                 parameters,
                 return_dict,
             )
-
-            params = return_dict["params"]
-            size = return_dict["size"]
-            metrics = dict(return_dict.get("metrics", {}))
+            params, size, metrics = self._read_child_result(return_dict)
             del return_dict
         else:
             params, size, metrics = self._new_child(mp_fit, config, parameters)
@@ -66,12 +63,33 @@ class FlowerClient(fl.client.NumPyClient):
         )
         client_process.start()
         client_process.join()
+        exitcode = client_process.exitcode
         client_process.close()
+        if exitcode != 0:
+            details = f" (exit code: {exitcode})" if exitcode is not None else ""
+            raise RuntimeError(f"Child training process terminated unexpectedly{details}.")
+
+        params, size, metrics = self._read_child_result(return_dict)
+        del (manager, return_dict, client_process)
+        return params, size, metrics
+
+    def _read_child_result(self, return_dict):
+        error = return_dict.get("error")
+        if error:
+            traceback_str = return_dict.get("traceback", "")
+            details = f"\nChild traceback:\n{traceback_str}" if traceback_str else ""
+            raise RuntimeError(f"Child training failed: {error}{details}")
+
+        missing = [key for key in ("params", "size") if key not in return_dict]
+        if missing:
+            raise RuntimeError(
+                f"Child training did not return required values: {missing}. "
+                "Check child process logs for the root cause."
+            )
 
         params = return_dict["params"]
         size = return_dict["size"]
         metrics = dict(return_dict.get("metrics", {}))
-        del (manager, return_dict, client_process)
         return params, size, metrics
 
     def start_client(self):

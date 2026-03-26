@@ -1,4 +1,5 @@
 import gc
+import traceback
 
 from typing import Any, Iterable, Optional
 
@@ -18,6 +19,41 @@ def cleanup_memory():
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+
+def _expected_state_items(model: torch.nn.Module, fedbn: bool):
+    """Return ordered `(name, tensor)` pairs expected from serialized parameters."""
+
+    if fedbn:
+        return [(name, tensor) for name, tensor in model.state_dict().items() if "bn" not in name]
+    return list(model.state_dict().items())
+
+
+def _validate_parameter_layout(parameters, model: torch.nn.Module, fedbn: bool, model_name: str):
+    """Validate incoming parameter list against the instantiated model layout."""
+
+    if parameters is None:
+        return
+
+    expected = _expected_state_items(model, fedbn)
+    expected_count = len(expected)
+    received_count = len(parameters)
+
+    if received_count != expected_count:
+        raise ValueError(
+            f"Received {received_count} parameter tensors, but model '{model_name}' expects "
+            f"{expected_count}. Check that server/client both use the same architecture."
+        )
+
+    for idx, (expected_name, expected_tensor) in enumerate(expected):
+        received_param = parameters[idx]
+        expected_shape = tuple(expected_tensor.shape)
+        received_shape = tuple(getattr(received_param, "shape", ()))
+        if received_shape != expected_shape:
+            raise ValueError(
+                f"Parameter shape mismatch at index {idx} ('{expected_name}') for model "
+                f"'{model_name}': received {received_shape}, expected {expected_shape}."
+            )
 
 
 def _resolve_device(device_hint):
@@ -230,103 +266,112 @@ def _estimate_quantization_flops(model: torch.nn.Module) -> float:
 
 
 def mp_fit(info, fl_info,config, parameters, return_dict):
+    try:
+        use_prune = fl_info.prune
+        use_prune_srv = fl_info.prune_srv
+        device = _resolve_device(fl_info.device if hasattr(fl_info, "device") else "cpu")
+        fed_dir = fl_info.fed_dir
+        cid = fl_info.cid
 
-    use_prune = fl_info.prune
-    use_prune_srv = fl_info.prune_srv
-    device = _resolve_device(fl_info.device if hasattr(fl_info, "device") else "cpu")
-    fed_dir = fl_info.fed_dir
-    cid = fl_info.cid
+        net = inst_model_info(info)
+        if fl_info.lora_config is not None :
+            net = inject_low_rank(net,fl_info.lora_config)
 
-    net = inst_model_info(info)
-    if fl_info.lora_config is not None :
-        net = inject_low_rank(net,fl_info.lora_config)
+        if fl_info.apply_quant:
+            fakequant_trainable_channel(net,fl_info.quant_bits)
 
-    if fl_info.apply_quant:
-        fakequant_trainable_channel(net,fl_info.quant_bits)
+        if parameters is not None:
+            _validate_parameter_layout(
+                parameters,
+                net,
+                fedbn=info.fedbn,
+                model_name=getattr(info, "model", "unknown"),
+            )
+            if use_prune_srv:
+                parameters = prune(parameters,config["prate"])
+            set_params(net, parameters,fedbn=info.fedbn)
 
-    if parameters is not None:
-        if use_prune_srv:
-            parameters = prune(parameters,config["prate"])
-        set_params(net, parameters,fedbn=info.fedbn)
+        net.to(device)
 
-    net.to(device)
+        lr = config["cl_lr"]
+        momentum = config["cl_momentum"]
+        weight_decay = config["cl_wd"]
+        # Load data for this client and get trainloader
+        trainloader = get_dataloader(
+            fed_dir,
+            cid,
+            is_train=True,
+            batch_size=config["batch_size"],
+            workers=fl_info.nworkers,
+            transform=dict_tranforms_train[info.dataset_name],
+        )
 
-    lr = config["cl_lr"]
-    momentum = config["cl_momentum"]
-    weight_decay = config["cl_wd"]
-    # Load data for this client and get trainloader
-    trainloader = get_dataloader(
-        fed_dir,
-        cid,
-        is_train=True,
-        batch_size=config["batch_size"],
-        workers=fl_info.nworkers,
-        transform=dict_tranforms_train[info.dataset_name],
-    )
+        criterion = torch.nn.CrossEntropyLoss().to(device)
 
-    criterion = torch.nn.CrossEntropyLoss().to(device)
+        params = [
+            {
+                "params": [value],
+                "name": key,
+                "weight_decay": weight_decay if "bn" not in key else 0.0,
+                "param_size": value.size(),
+                "nelement": value.nelement(),
+            }
+            for key, value in net.named_parameters()
+        ]
 
-    params = [
-        {
-            "params": [value],
-            "name": key,
-            "weight_decay": weight_decay if "bn" not in key else 0.0,
-            "param_size": value.size(),
-            "nelement": value.nelement(),
+        optimizer = torch.optim.SGD(params, 
+                                    lr = lr,
+                                    momentum = momentum,
+                                    nesterov = momentum > 0.0)
+
+        training_stats = train(
+            net,
+            trainloader,
+            config["epochs"],
+            optimizer,
+            criterion,
+            device,
+        )
+
+        epoch_flops = []
+        if isinstance(training_stats, dict):
+            epoch_flops = training_stats.get("epoch_flops", []) or []
+
+        lora_projection_flops = _estimate_lora_projection_flops(net, getattr(fl_info, "lora_config", None))
+        quantization_flops = (
+            _estimate_quantization_flops(net) if getattr(fl_info, "apply_quant", False) else 0.0
+        )
+
+        compression_flops = float(lora_projection_flops + quantization_flops)
+        decompression_flops = float(lora_projection_flops + quantization_flops)
+
+        epoch_flops_total = float(sum(epoch_flops)) if epoch_flops else 0.0
+        sum_epoch_including_comp = (
+            epoch_flops_total + compression_flops + decompression_flops
+        )
+
+        flop_metrics = {
+            "flops_by_epoch": epoch_flops_total,
+            "flops_compression": compression_flops,
+            "flops_decompression": decompression_flops,
+            "sum_flops_epoch_includingcompdecomp": sum_epoch_including_comp,
         }
-        for key, value in net.named_parameters()
-    ]
+        
+        if fl_info.apply_quant: 
+            fakequant_trainable_channel(net,fl_info.quant_bits)
 
-    optimizer = torch.optim.SGD(params, 
-                                lr = lr,
-                                momentum = momentum,
-                                nesterov = momentum > 0.0)
+        params = get_params(net,fedbn=info.fedbn)
 
-    training_stats = train(
-        net,
-        trainloader,
-        config["epochs"],
-        optimizer,
-        criterion,
-        device,
-    )
+        if use_prune:
+            params = prune(params,config["prate"])
 
-    epoch_flops = []
-    if isinstance(training_stats, dict):
-        epoch_flops = training_stats.get("epoch_flops", []) or []
+        net.to(torch.device("cpu"))
+        return_dict["params"] = params
+        return_dict["size"] = len(trainloader.dataset)
+        return_dict["metrics"] = flop_metrics
 
-    lora_projection_flops = _estimate_lora_projection_flops(net, getattr(fl_info, "lora_config", None))
-    quantization_flops = (
-        _estimate_quantization_flops(net) if getattr(fl_info, "apply_quant", False) else 0.0
-    )
-
-    compression_flops = float(lora_projection_flops + quantization_flops)
-    decompression_flops = float(lora_projection_flops + quantization_flops)
-
-    epoch_flops_total = float(sum(epoch_flops)) if epoch_flops else 0.0
-    sum_epoch_including_comp = (
-        epoch_flops_total + compression_flops + decompression_flops
-    )
-
-    flop_metrics = {
-        "flops_by_epoch": epoch_flops_total,
-        "flops_compression": compression_flops,
-        "flops_decompression": decompression_flops,
-        "sum_flops_epoch_includingcompdecomp": sum_epoch_including_comp,
-    }
-    
-    if fl_info.apply_quant: 
-        fakequant_trainable_channel(net,fl_info.quant_bits)
-
-    params = get_params(net,fedbn=info.fedbn)
-
-    if use_prune:
-        params = prune(params,config["prate"])
-
-    net.to(torch.device("cpu"))
-    return_dict["params"] = params
-    return_dict["size"] = len(trainloader.dataset)
-    return_dict["metrics"] = flop_metrics
-
-    del net, trainloader, optimizer, criterion
-    cleanup_memory()
+        del net, trainloader, optimizer, criterion
+        cleanup_memory()
+    except Exception as ex:
+        return_dict["error"] = str(ex)
+        return_dict["traceback"] = traceback.format_exc()
