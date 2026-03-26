@@ -47,6 +47,8 @@ def _build_metrics(ans: Dict[str, Any]) -> Dict[str, Any]:
         metrics["distributed_loss"] = loss
     if accuracy is not None:
         metrics["distributed_test_accuracy"] = accuracy
+        metrics["acc_servers_highest"] = accuracy
+        metrics["acc_server_highest"] = accuracy
 
     return metrics
 
