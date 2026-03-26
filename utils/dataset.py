@@ -133,7 +133,7 @@ def do_fl_partitioning(
     if is_cinic:
         images, labels = torch.load(path_to_dataset)
     else :
-        images, labels = torch.load(path_to_dataset, encoding="latin1")
+        images, labels = torch.load(path_to_dataset, encoding="latin1", weights_only=False)
 
     idx = np.array(range(len(images)))
     dataset = [idx, labels]
