@@ -11,12 +11,12 @@ def create_parser():
 
     ## FL
     parser.add_argument("--num_rounds", type=int, default=100,help="number of rounds for a federated learning training")
-    parser.add_argument("--num_clients", type=int, default=10,help="number of clients")
+    parser.add_argument("--num_clients", type=int, default=100,help="number of clients")
     parser.add_argument("--alpha",type=float, default=0.5,help="alpha used for LDA")
     parser.add_argument("--alpha_inf",action="store_true",help="special flag to use alpha as infinity") # uniform
     parser.add_argument("--val_ratio", type=float, default=0.2,help="validationd dataset split")
     parser.add_argument("--dataset", type = str, default='cifar10',help="which dataset to use")
-    parser.add_argument("--samp_rate", type=float, default=1.0,help="client's sample rate")
+    parser.add_argument("--samp_rate", type=float, default=0.1,help="client's sample rate")
     parser.add_argument("--strategy", type = str, default='fedlora',help="which strategy to use (default kept as fedlora for backward compatibility with current server setup)")
     parser.add_argument("--fedbn", action="store_true",help="fed bn strategy for local batchnorm")
     parser.add_argument("--drop_random", action="store_true",help="drop client's results with random guess")
