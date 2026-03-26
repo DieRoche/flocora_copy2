@@ -35,17 +35,18 @@ def _to_serializable(value: Any) -> Any:
 
 
 def _build_metrics(ans: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a Flower/W&B friendly metric payload from ``ans``."""
+    """Return a reduced Flower/W&B metric payload with canonical names."""
 
-    metrics = {key: _to_serializable(val) for key, val in ans.items()}
+    serialized = {key: _to_serializable(val) for key, val in ans.items()}
+    metrics: Dict[str, Any] = {}
 
-    loss = metrics.get("test_loss")
-    accuracy = metrics.get("test_acc")
+    loss = serialized.get("test_loss")
+    accuracy = serialized.get("test_acc")
 
-    if loss is not None and "loss" not in metrics:
-        metrics["loss"] = loss
+    if loss is not None:
+        metrics["distributed_loss"] = loss
     if accuracy is not None:
-        metrics.setdefault("accuracy", accuracy)
+        metrics["distributed_test_accuracy"] = accuracy
 
     return metrics
 
@@ -164,7 +165,6 @@ def _build_traffic_metrics(
     if clients_per_round <= 0:
         return {}
 
-    communication_steps = _resolve_communication_steps(args, config)
     upload_traffic = model_size_bytes * clients_per_round
     download_traffic = model_size_bytes * clients_per_round
     overall_traffic = upload_traffic + download_traffic
@@ -175,19 +175,6 @@ def _build_traffic_metrics(
         "overall_traffic": _ensure_float(overall_traffic),
         "upload_traffic_per_client": _ensure_float(model_size_bytes),
     }
-
-    if communication_steps != 1.0:
-        upload_on_wire = upload_traffic * communication_steps
-        download_on_wire = download_traffic * communication_steps
-        overall_on_wire = upload_on_wire + download_on_wire
-        metrics.update(
-            {
-                "communication_steps_per_round": _ensure_float(communication_steps),
-                "upload_traffic_on_wire": _ensure_float(upload_on_wire),
-                "download_traffic_on_wire": _ensure_float(download_on_wire),
-                "overall_traffic_on_wire": _ensure_float(overall_on_wire),
-            }
-        )
 
     return metrics
 
@@ -213,8 +200,8 @@ class Evaluate:
         traffic_metrics = _build_traffic_metrics(parameters, self.args, config)
         if traffic_metrics:
             metrics.update(traffic_metrics)
-        loss = metrics.get("test_loss")
-        accuracy = metrics.get("test_acc")
+        loss = metrics.get("distributed_loss")
+        accuracy = metrics.get("distributed_test_accuracy")
         logger.info(
             f"Server round {server_round} loss : {loss:.4f} acc : {accuracy:.4f}",
             extra=HFILE,
@@ -260,8 +247,8 @@ class EvaluateLora:
             for i, (sA, sB) in enumerate(zip(simA, simB)):
                 logger.info(f"Similarity for layer {i} --> simA: {sA}, simB: {sB}")
                 if self.args.wandb:
-                    to_log[f"simA_l{i}"] = sA
-                    to_log[f"simB_l{i}"] = sB
+                    to_log[f"simA_layer_{i}"] = sA
+                    to_log[f"simB_layer_{i}"] = sB
             self.past_a_matrix = current_a_list
             self.past_b_matrix = current_b_list
 
@@ -270,8 +257,8 @@ class EvaluateLora:
         traffic_metrics = _build_traffic_metrics(parameters, self.args, config)
         if traffic_metrics:
             metrics.update(traffic_metrics)
-        loss = metrics.get("test_loss")
-        accuracy = metrics.get("test_acc")
+        loss = metrics.get("distributed_loss")
+        accuracy = metrics.get("distributed_test_accuracy")
         logger.info(
             f"Server round {server_round} loss : {loss:.4f} acc : {accuracy:.4f}",
             extra=HFILE,
@@ -307,8 +294,8 @@ def get_evaluate_fn(model, test_set, device, args: Namespace):
         traffic_metrics = _build_traffic_metrics(parameters, args, config)
         if traffic_metrics:
             metrics.update(traffic_metrics)
-        loss = metrics.get("test_loss")
-        accuracy = metrics.get("test_acc")
+        loss = metrics.get("distributed_loss")
+        accuracy = metrics.get("distributed_test_accuracy")
         logger.info(
             f"Server round {server_round} loss : {loss:.4f} acc : {accuracy:.4f}",
             extra=HFILE,

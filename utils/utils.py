@@ -98,51 +98,45 @@ def pile_str(line, item):
 def aggregate_client_metrics(
     metrics: Iterable[Tuple[int, Mapping[str, object]]]
 ) -> Dict[str, float]:
-    """Aggregate numeric client metrics and expose totals/means.
-
-    Parameters
-    ----------
-    metrics: Iterable[Tuple[int, Mapping[str, object]]]
-        Sequence of ``(num_examples, metrics)`` tuples as provided by Flower.
-
-    Returns
-    -------
-    Dict[str, float]
-        Aggregated metrics including per-key sums (``*_sum``), means (``*_mean``),
-        and per-example values (``*_per_example``) when the total number of
-        examples is known. The helper also exposes ``aggregated_client_count``
-        and ``aggregated_num_examples`` to aid downstream consumers.
-    """
+    """Aggregate only the metric keys required by W&B reporting."""
 
     totals: Dict[str, float] = defaultdict(float)
     counts: Dict[str, int] = defaultdict(int)
     aggregated: Dict[str, float] = {}
 
-    special_metric_keys = {
+    if not hasattr(aggregate_client_metrics, "_running_total_flops"):
+        aggregate_client_metrics._running_total_flops = 0.0  # type: ignore[attr-defined]
+    if not hasattr(aggregate_client_metrics, "_running_total_flops_compression"):
+        aggregate_client_metrics._running_total_flops_compression = 0.0  # type: ignore[attr-defined]
+    if not hasattr(aggregate_client_metrics, "_running_total_flops_decompression"):
+        aggregate_client_metrics._running_total_flops_decompression = 0.0  # type: ignore[attr-defined]
+
+    allowed_metric_keys = {
+        "upload_sparsity",
+        "download_sparsity",
+        "server_to_client_nonzero",
+        "server_to_client_density",
+        "nonzero_communication_total",
+        "client_to_server_nonzero",
+        "client_to_server_density",
+        "upload_traffic_per_client",
+        "upload_traffic",
+        "download_traffic",
+        "overall_traffic",
+        "distributed_test_accuracy",
+        "distributed_loss",
         "flops_by_epoch",
         "flops_compression",
         "flops_decompression",
         "sum_flops_epoch_includingcompdecomp",
-        "total_flops",
     }
-
-    if not hasattr(aggregate_client_metrics, "_running_total_flops"):
-        aggregate_client_metrics._running_total_flops = 0.0  # type: ignore[attr-defined]
-
-    total_examples = 0
-    client_count = 0
 
     for num_examples, client_metrics in metrics:
         if not isinstance(client_metrics, Mapping):
             continue
-        client_count += 1
-        try:
-            total_examples += int(num_examples)
-        except (TypeError, ValueError):
-            pass
 
         for key, value in client_metrics.items():
-            if key == "cid":
+            if key == "cid" or key not in allowed_metric_keys:
                 continue
             try:
                 numeric_value = float(value)
@@ -151,29 +145,78 @@ def aggregate_client_metrics(
             totals[key] += numeric_value
             counts[key] += 1
 
-    if "sum_flops_epoch_includingcompdecomp" in totals:
-        running_total = getattr(
-            aggregate_client_metrics, "_running_total_flops", 0.0
+    round_flops = float(totals.get("flops_by_epoch", 0.0))
+    round_flops_compression = float(totals.get("flops_compression", 0.0))
+    round_flops_decompression = float(totals.get("flops_decompression", 0.0))
+    round_total_flops = float(
+        totals.get(
+            "sum_flops_epoch_includingcompdecomp",
+            round_flops + round_flops_compression + round_flops_decompression,
         )
-        running_total += float(totals["sum_flops_epoch_includingcompdecomp"])
-        aggregate_client_metrics._running_total_flops = running_total  # type: ignore[attr-defined]
-        totals["total_flops"] = running_total
-        counts["total_flops"] = 1
+    )
 
-    for key, total in totals.items():
-        if key in special_metric_keys:
-            aggregated[key] = float(total)
-            continue
-        aggregated[key] = float(total)
-        aggregated[f"{key}_sum"] = float(total)
-        aggregated[f"{key}_mean"] = float(total) / float(counts[key])
-        if total_examples > 0:
-            aggregated[f"{key}_per_example"] = float(total) / float(total_examples)
+    running_total = getattr(aggregate_client_metrics, "_running_total_flops", 0.0)
+    running_total += round_total_flops
+    aggregate_client_metrics._running_total_flops = running_total  # type: ignore[attr-defined]
 
-    if client_count > 0:
-        aggregated["aggregated_client_count"] = float(client_count)
-    if total_examples > 0:
-        aggregated["aggregated_num_examples"] = float(total_examples)
+    running_total_compression = getattr(
+        aggregate_client_metrics, "_running_total_flops_compression", 0.0
+    )
+    running_total_compression += round_flops_compression
+    aggregate_client_metrics._running_total_flops_compression = running_total_compression  # type: ignore[attr-defined]
+
+    running_total_decompression = getattr(
+        aggregate_client_metrics, "_running_total_flops_decompression", 0.0
+    )
+    running_total_decompression += round_flops_decompression
+    aggregate_client_metrics._running_total_flops_decompression = running_total_decompression  # type: ignore[attr-defined]
+
+    if round_flops > 0.0:
+        aggregated["round_flops"] = round_flops
+    if round_flops_compression > 0.0:
+        aggregated["round_flops_compression"] = round_flops_compression
+    if round_flops_decompression > 0.0:
+        aggregated["round_flops_decompression"] = round_flops_decompression
+    if round_total_flops > 0.0:
+        aggregated["total_flops_including_compression"] = round_total_flops
+
+    if running_total > 0.0:
+        aggregated["total_flops"] = float(running_total)
+    if running_total_compression > 0.0:
+        aggregated["total_flops_compression"] = float(running_total_compression)
+    if running_total_decompression > 0.0:
+        aggregated["total_flops_decompression"] = float(running_total_decompression)
+
+    mean_keys = {
+        "upload_sparsity",
+        "download_sparsity",
+        "server_to_client_density",
+        "client_to_server_density",
+        "upload_traffic_per_client",
+        "distributed_test_accuracy",
+        "distributed_loss",
+    }
+    sum_keys = {
+        "server_to_client_nonzero",
+        "client_to_server_nonzero",
+        "nonzero_communication_total",
+        "upload_traffic",
+        "download_traffic",
+        "overall_traffic",
+    }
+
+    for key in mean_keys:
+        if counts.get(key, 0) > 0:
+            mean_value = float(totals[key]) / float(counts[key])
+            aggregated[key] = mean_value
+            if key == "upload_sparsity":
+                aggregated["upload_sparsity_mean"] = mean_value
+            if key == "download_sparsity":
+                aggregated["download_sparsity_mean"] = mean_value
+
+    for key in sum_keys:
+        if counts.get(key, 0) > 0:
+            aggregated[key] = float(totals[key])
 
     return aggregated
 
@@ -243,10 +286,9 @@ def tell_history(
         else:
             round_indices = list(range(1, len(losses_dis) + 1))
 
-    try:
-        acc_distributed = hist.metrics_distributed["dist_acc"]
-    except KeyError:
-        acc_distributed = []
+    acc_distributed = hist.metrics_distributed.get("distributed_test_accuracy")
+    if acc_distributed is None:
+        acc_distributed = hist.metrics_distributed.get("dist_acc", [])
 
     acc_dis_values = _extract_metric_values(acc_distributed)
     losses_dis_values = _extract_metric_values(losses_dis)
@@ -265,10 +307,9 @@ def tell_history(
     if training_summary:
         report.update(
             {
-                "training_loss_mean": training_summary["mean"],
-                "training_loss_std": training_summary["std"],
                 "training_loss_lowest": training_summary["lowest"],
                 "training_loss_highest": training_summary["highest"],
+                "distributed_loss": training_summary["mean"],
             }
         )
 
@@ -276,8 +317,7 @@ def tell_history(
     if client_acc_summary:
         report.update(
             {
-                "acc_clients_mean": client_acc_summary["mean"],
-                "acc_clients_std": client_acc_summary["std"],
+                "distributed_test_accuracy": client_acc_summary["mean"],
                 "acc_clients_lowest": client_acc_summary["lowest"],
                 "acc_clients_highest": client_acc_summary["highest"],
             }
@@ -287,8 +327,6 @@ def tell_history(
     if server_acc_summary:
         report.update(
             {
-                "acc_servers_mean": server_acc_summary["mean"],
-                "acc_servers_std": server_acc_summary["std"],
                 "acc_servers_lowest": server_acc_summary["lowest"],
                 "acc_servers_highest": server_acc_summary["highest"],
             }
@@ -307,62 +345,24 @@ def tell_history(
             total_upload_traffic = upload_traffic_round * num_rounds
             total_download_traffic = download_traffic_round * num_rounds
             overall_traffic = total_upload_traffic + total_download_traffic
-
-            communication_steps = report_metadata.get(
-                "communication_steps_per_round"
-            )
-            try:
-                communication_steps = float(communication_steps)
-            except (TypeError, ValueError):
-                communication_steps = 1.0
-
-            if communication_steps <= 0:
-                communication_steps = 1.0
-
-            upload_on_wire_round = upload_traffic_round * communication_steps
-            download_on_wire_round = download_traffic_round * communication_steps
-            total_upload_on_wire = upload_on_wire_round * num_rounds
-            total_download_on_wire = download_on_wire_round * num_rounds
-            overall_traffic_on_wire = total_upload_on_wire + total_download_on_wire
-            total_communication_steps = communication_steps * num_rounds
+            per_client_upload_bytes = [model_size_bytes] * int(max(clients_per_round, 0))
 
             traffic_metrics: Dict[str, float] = {
                 "upload_traffic": upload_traffic_round,
                 "download_traffic": download_traffic_round,
-                "upload_traffic_per_client": model_size_bytes,
-                "per_user_upload_traffic": model_size_bytes,
+                "upload_traffic_per_client": float(
+                    np.mean(per_client_upload_bytes) if per_client_upload_bytes else 0.0
+                ),
                 "overall_traffic": overall_traffic,
-                "total_upload_traffic": total_upload_traffic,
-                "total_download_traffic": total_download_traffic,
             }
 
             per_round_traffic_metrics = {
                 "upload_traffic": upload_traffic_round,
                 "download_traffic": download_traffic_round,
-                "upload_traffic_per_client": model_size_bytes,
-                "per_user_upload_traffic": model_size_bytes,
+                "upload_traffic_per_client": float(
+                    np.mean(per_client_upload_bytes) if per_client_upload_bytes else 0.0
+                ),
             }
-
-            if communication_steps != 1.0:
-                traffic_metrics.update(
-                    {
-                        "communication_steps_per_round": communication_steps,
-                        "total_communication_steps": total_communication_steps,
-                        "upload_traffic_on_wire": upload_on_wire_round,
-                        "download_traffic_on_wire": download_on_wire_round,
-                        "total_upload_traffic_on_wire": total_upload_on_wire,
-                        "total_download_traffic_on_wire": total_download_on_wire,
-                        "overall_traffic_on_wire": overall_traffic_on_wire,
-                    }
-                )
-
-                per_round_traffic_metrics.update(
-                    {
-                        "communication_steps_per_round": communication_steps,
-                        "upload_traffic_on_wire": upload_on_wire_round,
-                        "download_traffic_on_wire": download_on_wire_round,
-                    }
-                )
 
             if not round_indices:
                 try:
@@ -373,6 +373,13 @@ def tell_history(
                     round_indices = list(range(1, round_count + 1))
 
             report.update(traffic_metrics)
+
+    if "cos_mean" in report and "cos_std" in report:
+        report["cos"] = float(report["cos_mean"])
+        report["cos_lowest"] = float(report["cos_mean"] - report["cos_std"])
+        report["cos_highest"] = float(report["cos_mean"] + report["cos_std"])
+        report.pop("cos_mean", None)
+        report.pop("cos_std", None)
 
     if report:
         infos["report"] = report

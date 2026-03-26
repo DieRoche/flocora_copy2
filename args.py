@@ -17,7 +17,7 @@ def create_parser():
     parser.add_argument("--val_ratio", type=float, default=0.2,help="validationd dataset split")
     parser.add_argument("--dataset", type = str, default='cifar10',help="which dataset to use")
     parser.add_argument("--samp_rate", type=float, default=1.0,help="client's sample rate")
-    parser.add_argument("--strategy", type = str, default='fedlora',help="which strategy to use")
+    parser.add_argument("--strategy", type = str, default='fedlora',help="which strategy to use (default kept as fedlora for backward compatibility with current server setup)")
     parser.add_argument("--fedbn", action="store_true",help="fed bn strategy for local batchnorm")
     parser.add_argument("--drop_random", action="store_true",help="drop client's results with random guess")
     parser.add_argument("--bb_only", action="store_true",help="to aggregate backbone only")
@@ -91,7 +91,7 @@ def create_parser():
     parser.add_argument("--quant_bits", type=int,default=8,help="number of bits for fakequant")
 
     ## Wandb
-    parser.add_argument("--wandb", action="store_true",default=True,help="to used wandb")
+    parser.add_argument("--wandb", action="store_true", default=True, help="enable Weights & Biases logging")
     parser.add_argument("--entity", type=str,default="dracoflow-upe",help="wandb entity name")
     parser.add_argument("--wandb_prj_name", type=str,default="compression_FL",help="compression_FL")
 
