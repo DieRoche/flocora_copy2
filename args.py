@@ -2,6 +2,7 @@ import argparse
 import numpy as np
 from typing import Iterable, Optional
 from pathlib import Path
+import os
 
 _CACHED_ARGS: Optional[argparse.Namespace] = None
 
@@ -112,6 +113,31 @@ def _postprocess_args(parsed_args: argparse.Namespace) -> argparse.Namespace:
 
     if parsed_args.path_results[-1] != "/":
         parsed_args.path_results += "/"
+
+    # On SLURM clusters, automatically align Ray resources with scheduler
+    # allocations when CLI values were not explicitly overridden.
+    # This keeps `python main_ray.py` usable directly from an sbatch script.
+    slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+    slurm_gpus = os.environ.get("SLURM_GPUS_ON_NODE")
+
+    min_fit_clients = max(1, int(parsed_args.num_clients * parsed_args.samp_rate))
+
+    if slurm_cpus is not None and parsed_args.ray_cpu == 5.0:
+        try:
+            cpus = max(1, int(slurm_cpus))
+            parsed_args.ray_cpu = max(1.0, float(cpus) / float(min_fit_clients))
+        except ValueError:
+            pass
+
+    if slurm_gpus is not None and parsed_args.ray_gpu == 0.5:
+        try:
+            gpus = max(0.0, float(slurm_gpus))
+            if gpus == 0.0:
+                parsed_args.ray_gpu = 0.0
+            else:
+                parsed_args.ray_gpu = max(0.0, gpus / float(min_fit_clients))
+        except ValueError:
+            pass
     # post process args if needed
     return parsed_args
 
