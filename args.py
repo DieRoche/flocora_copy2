@@ -64,14 +64,14 @@ def create_parser():
     parser.add_argument(
         "--ray_gpu",
         type=float,
-        default=0.5,
-        help="Per-client GPU fraction requested from Ray; omit or set to 0 to disable GPU usage",
+        default=1.0,
+        help="Per-client GPU fraction requested from Ray (default: 1)",
     )
     parser.add_argument(
         "--ray_cpu",
         type=float,
-        default=5.0,
-        help="Number of CPUs each Ray client reserves during simulation",
+        default=1.0,
+        help="Number of CPUs each Ray client reserves during simulation (default: 1)",
     )
 
     ##Lora
@@ -122,14 +122,14 @@ def _postprocess_args(parsed_args: argparse.Namespace) -> argparse.Namespace:
 
     min_fit_clients = max(1, int(parsed_args.num_clients * parsed_args.samp_rate))
 
-    if slurm_cpus is not None and parsed_args.ray_cpu == 5.0:
+    if slurm_cpus is not None and parsed_args.ray_cpu == 1.0:
         try:
             cpus = max(1, int(slurm_cpus))
             parsed_args.ray_cpu = max(1.0, float(cpus) / float(min_fit_clients))
         except ValueError:
             pass
 
-    if slurm_gpus is not None and parsed_args.ray_gpu == 0.5:
+    if slurm_gpus is not None and parsed_args.ray_gpu == 1.0:
         try:
             gpus = max(0.0, float(slurm_gpus))
             if gpus == 0.0:
