@@ -265,7 +265,10 @@ class CifarResNet18(nn.Module):
         )
         self.bn1 = self._make_norm(base_channels)
         self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        # CIFAR inputs are only 32x32, so the ImageNet-style max-pool right
+        # after the stem discards too much spatial information. Keep the
+        # canonical ResNet18 stage layout, but skip this early downsampling.
+        self.maxpool = nn.Identity()
 
         self.layer1 = self._make_layer(base_channels, blocks=2, stride=1)
         self.layer2 = self._make_layer(base_channels * 2, blocks=2, stride=2)
@@ -320,7 +323,10 @@ def _resolve_input_channels(input_shape: Any) -> int:
 
 def resnet18(feature_maps, input_shape, num_classes, batchn=False):
     in_channels = _resolve_input_channels(input_shape)
-    return CifarResNet18(in_channels, feature_maps, num_classes, use_batchnorm=batchn)
+    # Keep ResNet18 stage depth (2,2,2,2) and enforce a minimum base width of
+    # 64 channels for CIFAR-100 use, while still allowing larger custom widths.
+    base_channels = max(64, int(feature_maps))
+    return CifarResNet18(in_channels, base_channels, num_classes, use_batchnorm=batchn)
 
 def resnet34(feature_maps, input_shape, num_classes,batchn=False):
     large_input = False
