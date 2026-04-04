@@ -126,18 +126,20 @@ if __name__ == "__main__":
     # configure the strategy
 
     # Common parameters
+    sampled_clients = max(1, int(pool_size * args.samp_rate))
     kwargs_dict = {
         "fraction_fit": args.samp_rate,
         "fraction_evaluate": 0.0,
-        "min_fit_clients": int(pool_size * args.samp_rate),
-        "min_evaluate_clients": pool_size,
-        "min_available_clients": pool_size,  # All clients should be available
+        "min_fit_clients": sampled_clients,
+        "min_evaluate_clients": sampled_clients,
+        "min_available_clients": sampled_clients,
         "initial_parameters": [],
         "on_fit_config_fn": fit_config,
         "on_evaluate_config_fn": eval_config,
         "evaluate_fn": None,
         "drop_random": args.drop_random,
         "fedbn": args.fedbn,
+        "dataset_name": args.dataset,
     }
 
     aggregate_client_metrics._running_total_flops = 0.0  # type: ignore[attr-defined]
@@ -232,7 +234,7 @@ if __name__ == "__main__":
         kwargs_dict["evaluate_fn"] = get_evaluate_fn(server_model, test_set, device, args)
         kwargs_dict.update({"proximal_mu" : args.mu})
         agg_fn = kwargs_dict.pop("fit_metrics_aggregation_fn", None)
-        del server_model,kwargs_dict["drop_random"],kwargs_dict["fedbn"]
+        del server_model,kwargs_dict["drop_random"],kwargs_dict["fedbn"],kwargs_dict["dataset_name"]
         strategy = FedProx(**kwargs_dict)
         if agg_fn is not None:
             kwargs_dict["fit_metrics_aggregation_fn"] = agg_fn

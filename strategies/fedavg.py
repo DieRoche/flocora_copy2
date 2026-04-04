@@ -73,7 +73,8 @@ class FedAvg(Strategy):
         fit_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         evaluate_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         drop_random : bool = False,
-        fedbn : bool = False
+        fedbn : bool = False,
+        dataset_name: str = "cifar10"
 
     ) -> None:
         """Federated Averaging strategy.
@@ -134,6 +135,7 @@ class FedAvg(Strategy):
         self.evaluate_metrics_aggregation_fn = evaluate_metrics_aggregation_fn
         self.drop_random = drop_random
         self.fedbn = fedbn
+        self.dataset_name = dataset_name
 
     def __repr__(self) -> str:
         rep = f"FedAvg(accept_failures={self.accept_failures})"
@@ -234,7 +236,7 @@ class FedAvg(Strategy):
 
         if(self.drop_random):
             weights_results = []
-            random_guess = get_random_guess_perf("cifar10") #TODO : Redo
+            random_guess = get_random_guess_perf(self.dataset_name)
             # Convert results
             for _,fit_res in results:
                 _,res = self.evaluate_fn(-1,parameters_to_ndarrays(fit_res.parameters),{})

@@ -78,7 +78,7 @@ class FedLora(FedAvg):
 
         if(self.drop_random):
             weights_results = []
-            random_guess = get_random_guess_perf("cifar10") #TODO : Redo
+            random_guess = get_random_guess_perf(self.dataset_name)
             # Convert results
             for _,fit_res in results:
                 _,res = self.evaluate_fn(-1,parameters_to_ndarrays(fit_res.parameters),{})
