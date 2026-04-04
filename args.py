@@ -33,7 +33,12 @@ def create_parser():
     # ``effnet`` instantiates the EfficientNet-B0 backbone defined in ``effnet.py``.
     parser.add_argument("--model", type = str, default='resnet18',help="model to use (effnet, resnet18, resnet20, qresnet12)")
     parser.add_argument("--feature_maps", type=int, default=16,help="number of feature maps for the model")
-    parser.add_argument("--batchn", action="store_true",help="to use batch norm or group norm")
+    parser.add_argument(
+        "--batchn",
+        action="store_true",
+        default=True,
+        help="to use batch norm or group norm (default: batch norm)",
+    )
 
     ## Client
     parser.add_argument("--cl_lr", type=float, default=0.01,help="client's learning rate")
