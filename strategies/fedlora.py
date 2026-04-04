@@ -41,7 +41,8 @@ class FedLora(FedAvg):
         evaluate_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         device=None,
         drop_random : bool = False,
-        fedbn : bool = False
+        fedbn : bool = False,
+        dataset_name: str = "cifar10",
     ) -> None:
         super().__init__(
             fraction_fit=fraction_fit,
@@ -56,6 +57,7 @@ class FedLora(FedAvg):
             initial_parameters=initial_parameters,
             fit_metrics_aggregation_fn=fit_metrics_aggregation_fn,
             evaluate_metrics_aggregation_fn=evaluate_metrics_aggregation_fn,
+            dataset_name=dataset_name,
         )
         self.device = device
         self.server_parameters = initial_parameters
