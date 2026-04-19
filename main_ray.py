@@ -144,7 +144,6 @@ if __name__ == "__main__":
 
     aggregate_client_metrics._running_total_flops = 0.0  # type: ignore[attr-defined]
     aggregate_client_metrics._running_total_flops_compression = 0.0  # type: ignore[attr-defined]
-    aggregate_client_metrics._running_total_flops_decompression = 0.0  # type: ignore[attr-defined]
     kwargs_dict["fit_metrics_aggregation_fn"] = aggregate_client_metrics
 
     clients_per_round = max(kwargs_dict["min_fit_clients"], 0)

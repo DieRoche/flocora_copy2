@@ -6,7 +6,13 @@ from typing import Any, Iterable, Optional
 
 import torch
 from prune import prune
-from utils.utils import set_params, get_params,train,inst_model_info
+from utils.utils import (
+    set_params,
+    get_params,
+    train,
+    inst_model_info,
+    compute_payload_size_bytes,
+)
 from utils.dataset import (
     get_dataloader,
     dict_tranforms_train,
@@ -364,6 +370,12 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
 
         if use_prune:
             params = prune(params,config["prate"])
+
+        upload_traffic = compute_payload_size_bytes(params)
+        download_traffic = compute_payload_size_bytes(parameters)
+        flop_metrics["upload_traffic"] = float(upload_traffic)
+        flop_metrics["download_traffic"] = float(download_traffic)
+        flop_metrics["overall_traffic"] = float(upload_traffic + download_traffic)
 
         net.to(torch.device("cpu"))
         return_dict["params"] = params
