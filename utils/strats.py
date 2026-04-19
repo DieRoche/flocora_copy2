@@ -157,28 +157,9 @@ def _compute_model_payload_size(parameters: Any) -> float:
 def _build_traffic_metrics(
     parameters: Any, args: Namespace, config: Optional[Mapping[str, Any]]
 ) -> Dict[str, float]:
-    """Compute per-round traffic metrics matching ``tell_history``."""
-
-    model_size_bytes = _compute_model_payload_size(parameters)
-    if model_size_bytes <= 0:
-        return {}
-
-    clients_per_round = _resolve_clients_per_round(args, config)
-    if clients_per_round <= 0:
-        return {}
-
-    upload_traffic = model_size_bytes * clients_per_round
-    download_traffic = model_size_bytes * clients_per_round
-    overall_traffic = upload_traffic + download_traffic
-
-    metrics: Dict[str, float] = {
-        "upload_traffic": _ensure_float(upload_traffic),
-        "download_traffic": _ensure_float(download_traffic),
-        "overall_traffic": _ensure_float(overall_traffic),
-        "upload_traffic_per_client": _ensure_float(model_size_bytes),
-    }
-
-    return metrics
+    """Traffic metrics are collected from active client fit payloads."""
+    del parameters, args, config
+    return {}
 
 
 class Evaluate:
