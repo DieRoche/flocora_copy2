@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from collections import OrderedDict, defaultdict
+import csv
 from utils.models import model_selection
 from utils.dcs import *
 from models.projector import Project
@@ -123,6 +124,19 @@ def aggregate_client_metrics(
         "flops_by_epoch",
         "flops_compression",
         "flops_decompression",
+        "serialization_flops_round_clients",
+        "deserialization_flops_round_clients",
+        "compression_flops_round_clients",
+        "decompression_flops_round_clients",
+        "intermediate_communication_processing_flops_round_clients",
+        "aggregation_flops_round_server",
+        "update_flops_round_server",
+        "evaluation_flops_round",
+        "serialization_flops_round_server",
+        "deserialization_flops_round_server",
+        "compression_flops_round_server",
+        "decompression_flops_round_server",
+        "intermediate_communication_processing_flops_round_server",
     }
 
     for num_examples, client_metrics in metrics:
@@ -139,9 +153,47 @@ def aggregate_client_metrics(
             totals[key] += numeric_value
             counts[key] += 1
 
-    round_flops = float(totals.get("flops_by_epoch", 0.0))
+    training_flops_round_clients = float(totals.get("flops_by_epoch", 0.0))
+    aggregation_flops_round_server = float(totals.get("aggregation_flops_round_server", 0.0))
+    update_flops_round_server = float(totals.get("update_flops_round_server", 0.0))
+    evaluation_flops_round = float(totals.get("evaluation_flops_round", 0.0))
+    round_flops = float(
+        training_flops_round_clients
+        + aggregation_flops_round_server
+        + update_flops_round_server
+        + evaluation_flops_round
+    )
+
+    serialization_flops_round_clients = float(totals.get("serialization_flops_round_clients", 0.0))
+    serialization_flops_round_server = float(totals.get("serialization_flops_round_server", 0.0))
+    deserialization_flops_round_clients = float(totals.get("deserialization_flops_round_clients", 0.0))
+    deserialization_flops_round_server = float(totals.get("deserialization_flops_round_server", 0.0))
+    compression_flops_round_clients = float(
+        totals.get("compression_flops_round_clients", totals.get("flops_compression", 0.0))
+    )
+    compression_flops_round_server = float(totals.get("compression_flops_round_server", 0.0))
+    decompression_flops_round_clients = float(
+        totals.get("decompression_flops_round_clients", totals.get("flops_decompression", 0.0))
+    )
+    decompression_flops_round_server = float(totals.get("decompression_flops_round_server", 0.0))
+    intermediate_comm_flops_round_clients = float(
+        totals.get("intermediate_communication_processing_flops_round_clients", 0.0)
+    )
+    intermediate_comm_flops_round_server = float(
+        totals.get("intermediate_communication_processing_flops_round_server", 0.0)
+    )
+
     round_flops_compression = float(
-        totals.get("flops_compression", 0.0) + totals.get("flops_decompression", 0.0)
+        serialization_flops_round_clients
+        + serialization_flops_round_server
+        + deserialization_flops_round_clients
+        + deserialization_flops_round_server
+        + compression_flops_round_clients
+        + compression_flops_round_server
+        + decompression_flops_round_clients
+        + decompression_flops_round_server
+        + intermediate_comm_flops_round_clients
+        + intermediate_comm_flops_round_server
     )
     round_total_flops = float(round_flops + round_flops_compression)
 
@@ -159,6 +211,24 @@ def aggregate_client_metrics(
     aggregated["round_flops_compression"] = round_flops_compression
     aggregated["total_flops"] = float(running_total)
     aggregated["total_flops_compression"] = float(running_total_compression)
+    aggregated["round_training_flops_clients"] = training_flops_round_clients
+    aggregated["aggregation_flops_round_server"] = aggregation_flops_round_server
+    aggregated["update_flops_round_server"] = update_flops_round_server
+    aggregated["evaluation_flops_round"] = evaluation_flops_round
+    aggregated["serialization_flops_round_clients"] = serialization_flops_round_clients
+    aggregated["serialization_flops_round_server"] = serialization_flops_round_server
+    aggregated["deserialization_flops_round_clients"] = deserialization_flops_round_clients
+    aggregated["deserialization_flops_round_server"] = deserialization_flops_round_server
+    aggregated["compression_flops_round_clients"] = compression_flops_round_clients
+    aggregated["compression_flops_round_server"] = compression_flops_round_server
+    aggregated["decompression_flops_round_clients"] = decompression_flops_round_clients
+    aggregated["decompression_flops_round_server"] = decompression_flops_round_server
+    aggregated["intermediate_communication_processing_flops_round_clients"] = (
+        intermediate_comm_flops_round_clients
+    )
+    aggregated["intermediate_communication_processing_flops_round_server"] = (
+        intermediate_comm_flops_round_server
+    )
 
     mean_keys = {
         "upload_sparsity",
@@ -223,6 +293,122 @@ def compute_payload_size_bytes(payload: Any) -> float:
     return float(np_array.nbytes)
 
 
+def compute_payload_num_elements(payload: Any) -> float:
+    """Compute scalar element count for a payload structure."""
+
+    if payload is None:
+        return 0.0
+
+    if isinstance(payload, np.ndarray):
+        return float(payload.size)
+    if isinstance(payload, torch.Tensor):
+        return float(payload.nelement())
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        return float(len(payload))
+    if isinstance(payload, Mapping):
+        return float(sum(compute_payload_num_elements(v) for v in payload.values()))
+    if isinstance(payload, (list, tuple)):
+        return float(sum(compute_payload_num_elements(v) for v in payload))
+
+    if hasattr(payload, "tensors") and isinstance(getattr(payload, "tensors"), list):
+        return float(sum(len(tensor) for tensor in getattr(payload, "tensors")))
+
+    try:
+        np_array = np.asarray(payload)
+    except Exception:
+        return 0.0
+    return float(np_array.size)
+
+
+def estimate_serialization_flops(payload: Any) -> float:
+    """Estimate serialization FLOPs from payload element and byte volume."""
+
+    total_bytes = compute_payload_size_bytes(payload)
+    total_elements = compute_payload_num_elements(payload)
+    return float(total_elements + total_bytes)
+
+
+def estimate_deserialization_flops(payload: Any) -> float:
+    """Estimate deserialization FLOPs from payload element and byte volume."""
+
+    total_bytes = compute_payload_size_bytes(payload)
+    total_elements = compute_payload_num_elements(payload)
+    return float(total_elements + total_bytes)
+
+
+def estimate_fedavg_aggregation_and_update_flops(
+    client_payloads: Sequence[Sequence[np.ndarray]],
+) -> Tuple[float, float]:
+    """Estimate server aggregation/update FLOPs for elementwise weighted averaging."""
+
+    if not client_payloads:
+        return 0.0, 0.0
+
+    num_clients = len(client_payloads)
+    first_payload = client_payloads[0]
+    aggregation_flops = 0.0
+    update_flops = 0.0
+
+    for tensor in first_payload:
+        tensor_array = np.asarray(tensor)
+        num_elements = float(tensor_array.size)
+        if num_elements <= 0.0:
+            continue
+        aggregation_flops += num_elements * float(max(num_clients - 1, 0))
+        update_flops += num_elements
+
+    return float(aggregation_flops), float(update_flops)
+
+
+def _round_metrics_output_path(runtime_args: Namespace) -> Path:
+    base_path = Path(getattr(runtime_args, "path_results", "results/"))
+    base_path.mkdir(parents=True, exist_ok=True)
+    file_name = getattr(runtime_args, "file_name", "run")
+    return base_path / f"{file_name}_round_flops_metrics.csv"
+
+
+def _persist_round_metrics_log(runtime_args: Namespace, payload: Mapping[str, float]) -> None:
+    fieldnames = [
+        "round",
+        "round_flops",
+        "round_training_flops_clients",
+        "aggregation_flops_round_server",
+        "update_flops_round_server",
+        "evaluation_flops_round",
+        "round_flops_compression",
+        "compression_flops_clients",
+        "compression_flops_server",
+        "compression_flops_round_clients",
+        "compression_flops_round_server",
+        "decompression_flops_clients",
+        "decompression_flops_server",
+        "decompression_flops_round_clients",
+        "decompression_flops_round_server",
+        "serialization_flops",
+        "serialization_flops_round_clients",
+        "serialization_flops_round_server",
+        "deserialization_flops_round_clients",
+        "deserialization_flops_round_server",
+        "intermediate_communication_processing_flops_round_clients",
+        "intermediate_communication_processing_flops_round_server",
+        "total_flops",
+        "total_flops_compression",
+        "acc_servers_highest",
+        "overall_traffic",
+        "upload_traffic",
+        "download_traffic",
+    ]
+    output_path = _round_metrics_output_path(runtime_args)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    row = {field: payload.get(field, "") for field in fieldnames}
+    file_exists = output_path.exists()
+    with output_path.open("a", encoding="utf-8", newline="") as log_file:
+        writer = csv.DictWriter(log_file, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+
 def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = None) -> None:
     """Log metrics to Weights & Biases when the integration is enabled."""
 
@@ -237,9 +423,122 @@ def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = No
     if not getattr(runtime_args, "wandb", False):
         return
 
+    if not hasattr(maybe_log_to_wandb, "_round_cache"):
+        maybe_log_to_wandb._round_cache = {}  # type: ignore[attr-defined]
+    if not hasattr(maybe_log_to_wandb, "_running_total_flops"):
+        maybe_log_to_wandb._running_total_flops = 0.0  # type: ignore[attr-defined]
+    if not hasattr(maybe_log_to_wandb, "_running_total_flops_compression"):
+        maybe_log_to_wandb._running_total_flops_compression = 0.0  # type: ignore[attr-defined]
+
+    log_payload = dict(metrics)
+
+    if step is not None:
+        cache = maybe_log_to_wandb._round_cache  # type: ignore[attr-defined]
+        round_state = dict(cache.get(step, {}))
+        round_state.update(log_payload)
+
+        training = float(round_state.get("round_training_flops_clients", 0.0))
+        aggregation = float(round_state.get("aggregation_flops_round_server", 0.0))
+        update = float(round_state.get("update_flops_round_server", 0.0))
+        evaluation = float(round_state.get("evaluation_flops_round", 0.0))
+        round_flops = float(training + aggregation + update + evaluation)
+
+        serialization = float(
+            round_state.get("serialization_flops_round_clients", 0.0)
+            + round_state.get("serialization_flops_round_server", 0.0)
+        )
+        deserialization = float(
+            round_state.get("deserialization_flops_round_clients", 0.0)
+            + round_state.get("deserialization_flops_round_server", 0.0)
+        )
+        compression = float(
+            round_state.get("compression_flops_round_clients", 0.0)
+            + round_state.get("compression_flops_round_server", 0.0)
+        )
+        decompression = float(
+            round_state.get("decompression_flops_round_clients", 0.0)
+            + round_state.get("decompression_flops_round_server", 0.0)
+        )
+        intermediate_comm = float(
+            round_state.get("intermediate_communication_processing_flops_round_clients", 0.0)
+            + round_state.get("intermediate_communication_processing_flops_round_server", 0.0)
+        )
+        round_flops_compression = float(
+            serialization + deserialization + compression + decompression + intermediate_comm
+        )
+        round_total = float(round_flops + round_flops_compression)
+
+        previous_round_total = float(round_state.get("_round_total_accounted", 0.0))
+        previous_round_compression = float(round_state.get("_round_compression_accounted", 0.0))
+        maybe_log_to_wandb._running_total_flops += round_total - previous_round_total  # type: ignore[attr-defined]
+        maybe_log_to_wandb._running_total_flops_compression += (  # type: ignore[attr-defined]
+            round_flops_compression - previous_round_compression
+        )
+
+        round_state["round_flops"] = round_flops
+        round_state["round_flops_compression"] = round_flops_compression
+        round_state["total_flops"] = float(maybe_log_to_wandb._running_total_flops)  # type: ignore[attr-defined]
+        round_state["total_flops_compression"] = float(
+            maybe_log_to_wandb._running_total_flops_compression  # type: ignore[attr-defined]
+        )
+        round_state["compression_flops_clients"] = float(
+            round_state.get("compression_flops_round_clients", 0.0)
+        )
+        round_state["compression_flops_server"] = float(
+            round_state.get("compression_flops_round_server", 0.0)
+        )
+        round_state["decompression_flops_clients"] = float(
+            round_state.get("decompression_flops_round_clients", 0.0)
+        )
+        round_state["decompression_flops_server"] = float(
+            round_state.get("decompression_flops_round_server", 0.0)
+        )
+        round_state["serialization_flops"] = float(
+            round_state.get("serialization_flops_round_clients", 0.0)
+            + round_state.get("serialization_flops_round_server", 0.0)
+        )
+        round_state["_round_total_accounted"] = round_total
+        round_state["_round_compression_accounted"] = round_flops_compression
+        cache[step] = round_state
+
+        for key in (
+            "round_flops",
+            "round_flops_compression",
+            "total_flops",
+            "total_flops_compression",
+            "round_training_flops_clients",
+            "aggregation_flops_round_server",
+            "update_flops_round_server",
+            "evaluation_flops_round",
+            "serialization_flops_round_clients",
+            "serialization_flops_round_server",
+            "compression_flops_round_clients",
+            "compression_flops_round_server",
+            "decompression_flops_round_clients",
+            "decompression_flops_round_server",
+            "deserialization_flops_round_clients",
+            "deserialization_flops_round_server",
+            "compression_flops_clients",
+            "compression_flops_server",
+            "decompression_flops_clients",
+            "decompression_flops_server",
+            "serialization_flops",
+            "intermediate_communication_processing_flops_round_clients",
+            "intermediate_communication_processing_flops_round_server",
+            "acc_servers_highest",
+            "overall_traffic",
+            "upload_traffic",
+            "download_traffic",
+        ):
+            if key in round_state:
+                log_payload[key] = round_state[key]
+
+        log_payload["round"] = float(step)
+        _persist_round_metrics_log(runtime_args, log_payload)
+
     import wandb
 
-    wandb.log(dict(metrics), step=step)
+    wandb.log(log_payload, step=step)
 
 
 def _extract_metric_values(
@@ -412,13 +711,17 @@ def train(net, trainloader, epochs, optimizer, criterion, device):
     return {"epoch_flops": epoch_flops}
 
 
-def test(model, test_loader, device):
+def test(model, test_loader, device, track_flops: bool = False):
     if not isinstance(model,list):
         model =  [model]
 
     for m in model:
         m.eval()
         m.to(device)
+    flop_meters = [FlopMeter(m) for m in model] if track_flops else []
+    if track_flops:
+        for meter in flop_meters:
+            meter.start_epoch()
     outputs=[]
     losses = torch.zeros(len(model))
     accuracies = torch.zeros(len(model))
@@ -429,8 +732,12 @@ def test(model, test_loader, device):
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
             outputs=[]
-            for m in model:
+            for model_idx, m in enumerate(model):
+                if track_flops:
+                    flop_meters[model_idx].start_batch()
                 out, _ = m(data)
+                if track_flops:
+                    flop_meters[model_idx].finish_batch()
                 outputs.append(out)
             if(len(model)>1):
                 en_output = sum(outputs)/len(model)
@@ -454,12 +761,19 @@ def test(model, test_loader, device):
 
     # return results
 
+    evaluation_flops = 0.0
+    if track_flops:
+        for meter in flop_meters:
+            evaluation_flops += float(meter.finish_epoch())
+            meter.close()
+
     return {
         "test_loss": en_loss / total,
         "test_acc": en_accuracy / total,
         "test_acc_top_5": accuracy_top_5 / total,
         "losses": losses/total,
         "accuracies": accuracies/total,
+        "evaluation_flops": evaluation_flops,
     }
 
 def quick_plot(file_name, threshold=0.7):

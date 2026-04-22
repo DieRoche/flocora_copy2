@@ -12,6 +12,8 @@ from utils.utils import (
     train,
     inst_model_info,
     compute_payload_size_bytes,
+    estimate_serialization_flops,
+    estimate_deserialization_flops,
 )
 from utils.dataset import (
     get_dataloader,
@@ -360,6 +362,9 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
             "flops_by_epoch": epoch_flops_total,
             "flops_compression": compression_flops,
             "flops_decompression": decompression_flops,
+            "compression_flops_round_clients": compression_flops,
+            "decompression_flops_round_clients": decompression_flops,
+            "intermediate_communication_processing_flops_round_clients": 0.0,
             "sum_flops_epoch_includingcompdecomp": sum_epoch_including_comp,
         }
         
@@ -373,6 +378,10 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
 
         upload_traffic = compute_payload_size_bytes(params)
         download_traffic = compute_payload_size_bytes(parameters)
+        serialization_flops = estimate_serialization_flops(params)
+        deserialization_flops = estimate_deserialization_flops(parameters)
+        flop_metrics["serialization_flops_round_clients"] = float(serialization_flops)
+        flop_metrics["deserialization_flops_round_clients"] = float(deserialization_flops)
         flop_metrics["upload_traffic"] = float(upload_traffic)
         flop_metrics["download_traffic"] = float(download_traffic)
         flop_metrics["overall_traffic"] = float(upload_traffic + download_traffic)
