@@ -7,7 +7,7 @@ import numpy as np
 
 from log import logger, HFILE
 from utils.lora import extract_AB_matrix
-from utils.utils import test, save_model, set_params
+from utils.utils import test, save_model, set_params, maybe_log_to_wandb
 
 
 def _to_serializable(value: Any) -> Any:
@@ -49,6 +49,8 @@ def _build_metrics(ans: Dict[str, Any]) -> Dict[str, Any]:
         metrics["distributed_test_accuracy"] = accuracy
         metrics["acc_servers_highest"] = accuracy
         metrics["acc_server_highest"] = accuracy
+    if "evaluation_flops" in serialized:
+        metrics["evaluation_flops_round"] = _ensure_float(serialized.get("evaluation_flops"))
 
     return metrics
 
@@ -178,7 +180,7 @@ class Evaluate:
     def __call__(self, server_round, parameters, config, to_log=None):
         set_params(self.model, parameters, self.args.fedbn)
         self.model.to(self.device)
-        ans = test(self.model, self.test_loader, self.device)
+        ans = test(self.model, self.test_loader, self.device, track_flops=True)
         metrics = _build_metrics(ans)
         traffic_metrics = _build_traffic_metrics(parameters, self.args, config)
         if traffic_metrics:
@@ -196,9 +198,7 @@ class Evaluate:
             if to_log is None:
                 to_log = {}
             log_payload = {**to_log, **metrics}
-            import wandb
-
-            wandb.log(log_payload)
+            maybe_log_to_wandb(log_payload, step=server_round)
 
         return loss, metrics
 
@@ -235,7 +235,7 @@ class EvaluateLora:
             self.past_a_matrix = current_a_list
             self.past_b_matrix = current_b_list
 
-        ans = test(self.model, self.test_loader, self.device)
+        ans = test(self.model, self.test_loader, self.device, track_flops=True)
         metrics = _build_metrics(ans)
         traffic_metrics = _build_traffic_metrics(parameters, self.args, config)
         if traffic_metrics:
@@ -251,9 +251,7 @@ class EvaluateLora:
             save_model(f"checkpoint/{self.args.file_name}.npy", parameters)
         if server_round != -1 and self.args.wandb:
             log_payload = {**to_log, **metrics}
-            import wandb
-
-            wandb.log(log_payload)
+            maybe_log_to_wandb(log_payload, step=server_round)
 
         return loss, metrics
 
@@ -272,7 +270,7 @@ def get_evaluate_fn(model, test_set, device, args: Namespace):
     def evaluate(server_round, parameters, config):
         set_params(model, parameters, args.fedbn)
         model.to(device)
-        ans = test(model, test_loader, device)
+        ans = test(model, test_loader, device, track_flops=True)
         metrics = _build_metrics(ans)
         traffic_metrics = _build_traffic_metrics(parameters, args, config)
         if traffic_metrics:
@@ -287,9 +285,7 @@ def get_evaluate_fn(model, test_set, device, args: Namespace):
         if args.num_rounds == server_round or server_round % args.freq_checkpoint == 0:
             save_model(f"checkpoint/{args.file_name}.npy", parameters)
         if server_round != -1 and args.wandb:
-            import wandb
-
-            wandb.log(metrics)
+            maybe_log_to_wandb(metrics, step=server_round)
 
         return loss, metrics
 
