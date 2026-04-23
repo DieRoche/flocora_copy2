@@ -537,6 +537,8 @@ def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = No
             "decompression_flops_clients",
             "decompression_flops_server",
             "serialization_flops",
+            "deserialization_flops_round_clients",
+            "deserialization_flops_round_server",
             "intermediate_communication_processing_flops_round_clients",
             "intermediate_communication_processing_flops_round_server",
             "acc_servers_highest",
