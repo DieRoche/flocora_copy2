@@ -273,6 +273,112 @@ def _estimate_quantization_flops(model: torch.nn.Module) -> float:
     return float(total_flops)
 
 
+def _capture_target_spatial_dims(
+    model: torch.nn.Module,
+    target_modules: Iterable[str],
+    sample_input: torch.Tensor,
+) -> dict[str, tuple[int, int]]:
+    """Capture output `(H, W)` for target modules using a single forward pass."""
+
+    captured_dims: dict[str, tuple[int, int]] = {}
+    hooks = []
+
+    for module_name in target_modules:
+        module = _locate_module(model, module_name)
+        if module is None:
+            continue
+
+        def _hook(_module, _inputs, outputs, name=module_name):
+            output_tensor = outputs[0] if isinstance(outputs, (tuple, list)) else outputs
+            if not isinstance(output_tensor, torch.Tensor):
+                return
+            if output_tensor.dim() >= 4:
+                captured_dims[name] = (int(output_tensor.shape[-2]), int(output_tensor.shape[-1]))
+            else:
+                captured_dims[name] = (1, 1)
+
+        hooks.append(module.register_forward_hook(_hook))
+
+    was_training = model.training
+    model.eval()
+    with torch.no_grad():
+        model(sample_input)
+    if was_training:
+        model.train()
+
+    for hook in hooks:
+        hook.remove()
+
+    return captured_dims
+
+
+def _estimate_lora_training_and_communication(
+    model: torch.nn.Module,
+    lora_config,
+    sample_input: Optional[torch.Tensor],
+    num_batches: int,
+    num_epochs: int,
+) -> tuple[float, float]:
+    """Estimate LoRA training FLOPs and communication size per round."""
+
+    if lora_config is None:
+        return 0.0, 0.0
+
+    target_modules = getattr(lora_config, "target_modules", None)
+    if not target_modules or num_batches <= 0 or num_epochs <= 0:
+        return 0.0, 0.0
+
+    spatial_dims = {}
+    if sample_input is not None:
+        spatial_dims = _capture_target_spatial_dims(model, target_modules, sample_input)
+
+    forward_flops_total = 0.0
+    communication_size_total = 0.0
+
+    for module_name in target_modules:
+        module = _locate_module(model, module_name)
+        if module is None:
+            continue
+
+        ranks = list(_extract_lora_ranks(module))
+        if not ranks:
+            fallback_rank = _get_module_rank(lora_config, module_name)
+            if fallback_rank <= 0:
+                continue
+            ranks = [fallback_rank]
+
+        if isinstance(module, torch.nn.Conv2d):
+            cin = int(module.in_channels)
+            cout = int(module.out_channels)
+            kh, kw = module.kernel_size
+            k_sq = int(kh * kw)
+            h, w = spatial_dims.get(module_name, (1, 1))
+        elif isinstance(module, torch.nn.Linear):
+            cin = int(module.in_features)
+            cout = int(module.out_features)
+            k_sq = 1
+            h, w = 1, 1
+        else:
+            weight = getattr(module, "weight", None)
+            if weight is None or weight.ndim < 2:
+                continue
+            cin = int(weight[0].numel())
+            cout = int(weight.shape[0])
+            k_sq = 1
+            h, w = spatial_dims.get(module_name, (1, 1))
+
+        for rank in ranks:
+            r = float(rank)
+            forward_flops = (r * float(cin) * float(h) * float(w)) + (
+                float(cout) * r * float(k_sq) * float(h) * float(w)
+            )
+            forward_flops_total += forward_flops
+            communication_size_total += (r * float(cin)) + (float(cout) * r * float(k_sq))
+
+    training_flops_total = 3.0 * forward_flops_total * float(num_batches) * float(num_epochs)
+    return float(training_flops_total), float(communication_size_total)
+
+
 def mp_fit(info, fl_info,config, parameters, return_dict):
     try:
         use_prune = fl_info.prune
@@ -315,6 +421,13 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
         )
 
         criterion = torch.nn.CrossEntropyLoss().to(device)
+        sample_input = None
+        try:
+            sample_batch = next(iter(trainloader))
+            if isinstance(sample_batch, (tuple, list)) and len(sample_batch) > 0:
+                sample_input = sample_batch[0].to(device)
+        except StopIteration:
+            sample_input = None
 
         params = [
             {
@@ -345,6 +458,14 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
         if isinstance(training_stats, dict):
             epoch_flops = training_stats.get("epoch_flops", []) or []
 
+        lora_training_flops, lora_communication_size = _estimate_lora_training_and_communication(
+            net,
+            getattr(fl_info, "lora_config", None),
+            sample_input,
+            num_batches=len(trainloader),
+            num_epochs=int(config["epochs"]),
+        )
+
         lora_projection_flops = _estimate_lora_projection_flops(net, getattr(fl_info, "lora_config", None))
         quantization_flops = (
             _estimate_quantization_flops(net) if getattr(fl_info, "apply_quant", False) else 0.0
@@ -354,6 +475,8 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
         decompression_flops = float(lora_projection_flops + quantization_flops)
 
         epoch_flops_total = float(sum(epoch_flops)) if epoch_flops else 0.0
+        if getattr(fl_info, "lora_config", None) is not None and lora_training_flops > 0.0:
+            epoch_flops_total = float(lora_training_flops)
         sum_epoch_including_comp = (
             epoch_flops_total + compression_flops + decompression_flops
         )
@@ -365,6 +488,7 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
             "compression_flops_round_clients": compression_flops,
             "decompression_flops_round_clients": decompression_flops,
             "intermediate_communication_processing_flops_round_clients": 0.0,
+            "communication_lora_size_round_clients": float(lora_communication_size),
             "sum_flops_epoch_includingcompdecomp": sum_epoch_including_comp,
         }
         

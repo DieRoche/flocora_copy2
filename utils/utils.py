@@ -129,6 +129,7 @@ def aggregate_client_metrics(
         "compression_flops_round_clients",
         "decompression_flops_round_clients",
         "intermediate_communication_processing_flops_round_clients",
+        "communication_lora_size_round_clients",
         "aggregation_flops_round_server",
         "update_flops_round_server",
         "evaluation_flops_round",
@@ -229,6 +230,9 @@ def aggregate_client_metrics(
     aggregated["intermediate_communication_processing_flops_round_server"] = (
         intermediate_comm_flops_round_server
     )
+    aggregated["communication_lora_size_round_clients"] = float(
+        totals.get("communication_lora_size_round_clients", 0.0)
+    )
 
     mean_keys = {
         "upload_sparsity",
@@ -242,6 +246,7 @@ def aggregate_client_metrics(
         "server_to_client_nonzero",
         "client_to_server_nonzero",
         "nonzero_communication_total",
+        "communication_lora_size_round_clients",
     }
 
     for key in mean_keys:
@@ -385,6 +390,7 @@ def _persist_round_metrics_log(runtime_args: Namespace, payload: Mapping[str, fl
         "deserialization_flops_round_server",
         "intermediate_communication_processing_flops_round_clients",
         "intermediate_communication_processing_flops_round_server",
+        "communication_lora_size_round_clients",
         "total_flops",
         "total_flops_compression",
         "acc_servers_highest",
@@ -541,6 +547,7 @@ def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = No
             "deserialization_flops_round_server",
             "intermediate_communication_processing_flops_round_clients",
             "intermediate_communication_processing_flops_round_server",
+            "communication_lora_size_round_clients",
             "acc_servers_highest",
             "overall_traffic",
             "upload_traffic",
