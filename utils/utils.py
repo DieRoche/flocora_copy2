@@ -343,46 +343,66 @@ def estimate_deserialization_flops(payload: Any) -> float:
 
 
 def estimate_lora_projection_flops_from_payload(
-    payload: Sequence[np.ndarray], state_keys: Sequence[str]
+    payload: Sequence[np.ndarray], state_keys: Optional[Sequence[str]] = None
 ) -> float:
     """Estimate FLOPs to reconstruct dense updates from LoRA A/B factors.
 
     The payload is expected to follow PEFT state ordering (`state_keys`), where
     each `lora_A` tensor is paired with a corresponding `lora_B` tensor under
-    the same logical adapter path.
+    the same logical adapter path. If keys are unavailable, a shape-based
+    fallback pairs adjacent tensors when dimensions are LoRA-compatible.
     """
 
-    if not payload or not state_keys or len(payload) != len(state_keys):
+    if not payload:
         return 0.0
 
-    lora_a_tensors: Dict[str, np.ndarray] = {}
-    lora_b_tensors: Dict[str, np.ndarray] = {}
-
-    for key, tensor in zip(state_keys, payload):
-        array = np.asarray(tensor)
-        if "lora_A" in key:
-            pair_key = re.sub(r"lora_A(\.[^.]+)?\.weight", "", key)
-            lora_a_tensors[pair_key] = array
-        elif "lora_B" in key:
-            pair_key = re.sub(r"lora_B(\.[^.]+)?\.weight", "", key)
-            lora_b_tensors[pair_key] = array
-
     projection_flops = 0.0
-    for pair_key, a_tensor in lora_a_tensors.items():
-        b_tensor = lora_b_tensors.get(pair_key)
-        if b_tensor is None:
-            continue
-        if a_tensor.ndim < 2 or b_tensor.ndim < 2:
-            continue
 
+    def _projection_cost(a_tensor: np.ndarray, b_tensor: np.ndarray) -> float:
+        if a_tensor.ndim < 2 or b_tensor.ndim < 2:
+            return 0.0
         rank = float(a_tensor.shape[0])
         n = float(np.prod(a_tensor.shape[1:]))
         m = float(b_tensor.shape[0] * np.prod(b_tensor.shape[2:]))
-
         if rank <= 0.0 or n <= 0.0 or m <= 0.0:
-            continue
+            return 0.0
+        return float(2.0 * m * n * rank)
 
-        projection_flops += 2.0 * m * n * rank
+    if state_keys and len(state_keys) == len(payload):
+        lora_a_tensors: Dict[str, np.ndarray] = {}
+        lora_b_tensors: Dict[str, np.ndarray] = {}
+        for key, tensor in zip(state_keys, payload):
+            array = np.asarray(tensor)
+            if "lora_A" in key:
+                pair_key = re.sub(r"lora_A(\.[^.]+)?\.weight", "", key)
+                lora_a_tensors[pair_key] = array
+            elif "lora_B" in key:
+                pair_key = re.sub(r"lora_B(\.[^.]+)?\.weight", "", key)
+                lora_b_tensors[pair_key] = array
+        for pair_key, a_tensor in lora_a_tensors.items():
+            b_tensor = lora_b_tensors.get(pair_key)
+            if b_tensor is None:
+                continue
+            projection_flops += _projection_cost(a_tensor, b_tensor)
+        return float(projection_flops)
+
+    # Fallback when key metadata is unavailable (e.g. evaluate_fn is disabled).
+    # LoRA payload ordering is typically A then B for each adapter; we pair
+    # adjacent tensors if their rank dimension is compatible.
+    arrays = [np.asarray(tensor) for tensor in payload]
+    idx = 0
+    while idx + 1 < len(arrays):
+        a_tensor = arrays[idx]
+        b_tensor = arrays[idx + 1]
+        if (
+            a_tensor.ndim >= 2
+            and b_tensor.ndim >= 2
+            and a_tensor.shape[0] == b_tensor.shape[1]
+        ):
+            projection_flops += _projection_cost(a_tensor, b_tensor)
+            idx += 2
+            continue
+        idx += 1
 
     return float(projection_flops)
 
