@@ -220,8 +220,11 @@ class EvaluateLora:
         self.past_a_matrix, self.past_b_matrix = extract_AB_matrix(model.state_dict())
 
     def __call__(self, server_round, parameters, config):
-        if self.args.strategy == "fedlora":
-            set_lora_params(self.model, parameters)
+        if self.args.strategy in {"fedlora", "fedloha"}:
+            if server_round == 0:
+                set_params(self.model, parameters, self.args.fedbn)
+            else:
+                set_lora_params(self.model, parameters)
         else:
             set_params(self.model, parameters, self.args.fedbn)
         to_log = {}
