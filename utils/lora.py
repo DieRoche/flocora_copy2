@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from peft import LoraConfig,LoHaConfig,get_peft_model_state_dict,set_peft_model_state_dict
 from peft import get_peft_model
 from collections import OrderedDict
+from typing import List, Tuple
 import numpy as np
 from utils.dcs import LoraInfo
 from torch.nn.init import orthogonal_
@@ -41,9 +42,21 @@ def get_lora_params(lora_model):
     state_dict = get_peft_model_state_dict(model=lora_model)
     return [val.cpu().numpy() for _, val in state_dict.items()]
 
+def get_lora_state_dict(lora_model) -> OrderedDict:
+    """Return PEFT payload state dict (LoRA/LoHa + modules_to_save) in stable order."""
+    return OrderedDict(get_peft_model_state_dict(model=lora_model))
+
+def get_lora_state_items(lora_model) -> List[Tuple[str, torch.Tensor]]:
+    """Return ordered `(key, tensor)` pairs for PEFT payload validation/debugging."""
+    return list(get_lora_state_dict(lora_model).items())
+
 def set_lora_params(lora_model,adapter_params):
-    lora_state_dict = get_peft_model_state_dict(lora_model)
-    keys = lora_state_dict.keys()
+    lora_state_dict = get_lora_state_dict(lora_model)
+    keys = list(lora_state_dict.keys())
+    if len(adapter_params) != len(keys):
+        raise ValueError(
+            f"Received {len(adapter_params)} LoRA tensors, expected {len(keys)}."
+        )
     params_dict = zip(keys, adapter_params)
     state_dict = OrderedDict({k: torch.from_numpy(np.copy(v)) for k, v in params_dict})
     return set_peft_model_state_dict(lora_model,state_dict)
