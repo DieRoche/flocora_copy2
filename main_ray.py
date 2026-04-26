@@ -18,7 +18,8 @@ from utils.file_name import gen_filename, gen_run_name
 from utils.server import *
 from log import logger, HFILE
 from utils.strats import Evaluate, EvaluateLora, get_evaluate_fn
-from utils.simple_quant import original_msg_size, quant_msg_size
+from utils.simple_quant import original_msg_size
+from utils.lora import get_lora_params
 
 args: Optional[Namespace] = None
 client_lr: float = 0.0
@@ -211,13 +212,9 @@ if __name__ == "__main__":
         total_nb_params = _total
         trainable_params = 100 * _trainable / _total
 
-        if args.apply_quant:
-            model_size = quant_msg_size(server_model,bits=args.quant_bits)
-        else:
-            model_size = original_msg_size(server_model)
-
-
-        kwargs_dict["initial_parameters"] = get_tensor_parameters(server_model,args.fedbn)
+        initial_lora_params = get_lora_params(server_model)
+        model_size = compute_payload_size_bytes(initial_lora_params)
+        kwargs_dict["initial_parameters"] = ndarrays_to_parameters(initial_lora_params)
 
         # evaluate = get_evaluate_fn(server_model, test_set, device)
         # kwargs_dict["evaluate_fn"] = get_evaluate_fn(server_model, test_set, device)
