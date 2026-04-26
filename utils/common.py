@@ -489,33 +489,6 @@ def create_lda_partitions(
             partition_data[partition_id].extend(selected)
             partition_targets[partition_id].extend([class_idx] * count)
 
-    # Guard against empty partitions: downstream training uses DataLoader with
-    # shuffle=True, which fails on empty datasets. Rebalance minimally by moving
-    # one sample from the largest non-empty donors to empty partitions.
-    partition_sizes = [len(samples) for samples in partition_data]
-    empty_partitions = [idx for idx, size in enumerate(partition_sizes) if size == 0]
-    if empty_partitions:
-        total_samples = int(sum(partition_sizes))
-        if total_samples < num_partitions:
-            raise ValueError(
-                "Cannot guarantee non-empty partitions: total samples are fewer than clients."
-            )
-
-        for empty_idx in empty_partitions:
-            donor_candidates = [idx for idx, size in enumerate(partition_sizes) if size > 1]
-            if not donor_candidates:
-                raise ValueError(
-                    "Unable to rebalance Dirichlet partitions without creating another empty client."
-                )
-            donor_idx = max(donor_candidates, key=lambda idx: partition_sizes[idx])
-            move_pos = int(rng.integers(0, partition_sizes[donor_idx]))
-            moved_sample = partition_data[donor_idx].pop(move_pos)
-            moved_target = partition_targets[donor_idx].pop(move_pos)
-            partition_data[empty_idx].append(moved_sample)
-            partition_targets[empty_idx].append(moved_target)
-            partition_sizes[donor_idx] -= 1
-            partition_sizes[empty_idx] += 1
-
     for partition_id in range(num_partitions):
         if len(partition_data[partition_id]) == 0:
             data_array = np.array([], dtype=x.dtype)
