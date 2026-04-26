@@ -80,8 +80,8 @@ def create_parser():
     )
 
     ##Lora
-    parser.add_argument("--lora_alpha", type=int,default=16,help="alpha parameter in a lora adapter")
-    parser.add_argument("--lora_r", type=int,default=16,help="common dimmension in a lora adapter")
+    parser.add_argument("--lora_alpha", type=int,default=512,help="alpha parameter in a lora adapter")
+    parser.add_argument("--lora_r", type=int,default=32,help="common dimmension in a lora adapter")
     parser.add_argument("--lora_keepa", action="store_true",help="during merge, if matrix A should be reseted or not")
     parser.add_argument("--lora_merging_period", type=int,default=1,help="period to merge models")
     parser.add_argument("--apply_lora", action="store_true",help="experimental, to apply lora to FedDF")

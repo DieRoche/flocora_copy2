@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 
 from log import logger, HFILE
-from utils.lora import extract_AB_matrix
+from utils.lora import extract_AB_matrix, set_lora_params
 from utils.utils import test, save_model, set_params, maybe_log_to_wandb
 
 
@@ -218,7 +218,7 @@ class EvaluateLora:
         self.past_a_matrix, self.past_b_matrix = extract_AB_matrix(model.state_dict())
 
     def __call__(self, server_round, parameters, config):
-        set_params(self.model, parameters, self.args.fedbn)
+        set_lora_params(self.model, parameters)
         to_log = {}
 
         self.model.to(self.device)
