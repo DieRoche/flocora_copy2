@@ -61,6 +61,7 @@ class FlInfo():
     server_model : str = None
     strategy     : str = None
     lora_config  : LoraInfo = None
+    seed         : int = 5
     nworkers     : int = 2,
     apply_quant  : bool = False,
     quant_bits   : int = 8

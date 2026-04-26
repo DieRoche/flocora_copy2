@@ -218,7 +218,10 @@ class EvaluateLora:
         self.past_a_matrix, self.past_b_matrix = extract_AB_matrix(model.state_dict())
 
     def __call__(self, server_round, parameters, config):
-        set_lora_params(self.model, parameters)
+        try:
+            set_lora_params(self.model, parameters)
+        except ValueError:
+            set_params(self.model, parameters, self.args.fedbn)
         to_log = {}
 
         self.model.to(self.device)

@@ -1,10 +1,10 @@
 import multiprocessing
+import random
 from argparse import Namespace
 from typing import Optional
 
 import torch
 import torch.multiprocessing as mp
-from flwr.common import ndarrays_to_parameters
 
 mp.set_start_method("spawn", force=True)
 from json import dumps
@@ -77,6 +77,11 @@ def build_server_info(test_set,knn_set=None):
 if __name__ == "__main__":
     saddr = "0.0.0.0:8080"
     args = args_module.parse_and_cache_args()
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
     client_lr = args.cl_lr
     processes = []
 
@@ -215,7 +220,7 @@ if __name__ == "__main__":
 
         initial_lora_params = get_lora_params(server_model)
         model_size = compute_payload_size_bytes(initial_lora_params)
-        kwargs_dict["initial_parameters"] = ndarrays_to_parameters(initial_lora_params)
+        kwargs_dict["initial_parameters"] = get_tensor_parameters(server_model,args.fedbn)
 
         # evaluate = get_evaluate_fn(server_model, test_set, device)
         # kwargs_dict["evaluate_fn"] = get_evaluate_fn(server_model, test_set, device)
@@ -274,6 +279,7 @@ if __name__ == "__main__":
             prune_srv=args.prune_srv,
             strategy=args.strategy,
             lora_config = lora_config,
+            seed=args.seed,
             nworkers=args.nworkers,
             apply_quant=args.apply_quant,
             quant_bits=args.quant_bits,

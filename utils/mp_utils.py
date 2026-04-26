@@ -1,10 +1,12 @@
 import gc
+import random
 import traceback
 
 from typing import Any, Iterable, Optional
 
 
 import torch
+import numpy as np
 from prune import prune
 from utils.utils import (
     set_params,
@@ -89,6 +91,23 @@ def _validate_lora_parameter_layout(parameters, model: torch.nn.Module, model_na
                 f"LoRA parameter shape mismatch at index {idx} ('{expected_name}') for model "
                 f"'{model_name}': received {received_shape}, expected {expected_shape}."
             )
+
+
+def _is_lora_payload(parameters, model: torch.nn.Module) -> bool:
+    """Return ``True`` when ``parameters`` match LoRA payload layout."""
+
+    if parameters is None:
+        return False
+
+    expected = get_lora_state_items(model)
+    if len(parameters) != len(expected):
+        return False
+
+    for idx, (_, expected_tensor) in enumerate(expected):
+        if tuple(getattr(parameters[idx], "shape", ())) != tuple(expected_tensor.shape):
+            return False
+
+    return True
 
 
 def _resolve_device(device_hint):
@@ -408,6 +427,13 @@ def _estimate_lora_training_and_communication(
 
 def mp_fit(info, fl_info,config, parameters, return_dict):
     try:
+        base_seed = int(getattr(fl_info, "seed", 5))
+        random.seed(base_seed)
+        np.random.seed(base_seed)
+        torch.manual_seed(base_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(base_seed)
+
         use_prune = fl_info.prune
         use_prune_srv = fl_info.prune_srv
         device = _resolve_device(fl_info.device if hasattr(fl_info, "device") else "cpu")
@@ -423,14 +449,25 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
 
         if parameters is not None:
             if fl_info.lora_config is not None:
-                _validate_lora_parameter_layout(
-                    parameters,
-                    net,
-                    model_name=getattr(info, "model", "unknown"),
-                )
-                if use_prune_srv:
-                    parameters = prune(parameters,config["prate"])
-                set_lora_params(net, parameters)
+                if _is_lora_payload(parameters, net):
+                    _validate_lora_parameter_layout(
+                        parameters,
+                        net,
+                        model_name=getattr(info, "model", "unknown"),
+                    )
+                    if use_prune_srv:
+                        parameters = prune(parameters,config["prate"])
+                    set_lora_params(net, parameters)
+                else:
+                    _validate_parameter_layout(
+                        parameters,
+                        net,
+                        fedbn=info.fedbn,
+                        model_name=getattr(info, "model", "unknown"),
+                    )
+                    if use_prune_srv:
+                        parameters = prune(parameters,config["prate"])
+                    set_params(net, parameters,fedbn=info.fedbn)
             else:
                 _validate_parameter_layout(
                     parameters,
