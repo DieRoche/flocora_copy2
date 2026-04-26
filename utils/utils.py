@@ -1,3 +1,4 @@
+import re
 import torch
 import numpy as np
 from collections import OrderedDict, defaultdict
@@ -339,6 +340,51 @@ def estimate_deserialization_flops(payload: Any) -> float:
     total_bytes = compute_payload_size_bytes(payload)
     total_elements = compute_payload_num_elements(payload)
     return float(total_elements + total_bytes)
+
+
+def estimate_lora_projection_flops_from_payload(
+    payload: Sequence[np.ndarray], state_keys: Sequence[str]
+) -> float:
+    """Estimate FLOPs to reconstruct dense updates from LoRA A/B factors.
+
+    The payload is expected to follow PEFT state ordering (`state_keys`), where
+    each `lora_A` tensor is paired with a corresponding `lora_B` tensor under
+    the same logical adapter path.
+    """
+
+    if not payload or not state_keys or len(payload) != len(state_keys):
+        return 0.0
+
+    lora_a_tensors: Dict[str, np.ndarray] = {}
+    lora_b_tensors: Dict[str, np.ndarray] = {}
+
+    for key, tensor in zip(state_keys, payload):
+        array = np.asarray(tensor)
+        if "lora_A" in key:
+            pair_key = re.sub(r"lora_A(\.[^.]+)?\.weight", "", key)
+            lora_a_tensors[pair_key] = array
+        elif "lora_B" in key:
+            pair_key = re.sub(r"lora_B(\.[^.]+)?\.weight", "", key)
+            lora_b_tensors[pair_key] = array
+
+    projection_flops = 0.0
+    for pair_key, a_tensor in lora_a_tensors.items():
+        b_tensor = lora_b_tensors.get(pair_key)
+        if b_tensor is None:
+            continue
+        if a_tensor.ndim < 2 or b_tensor.ndim < 2:
+            continue
+
+        rank = float(a_tensor.shape[0])
+        n = float(np.prod(a_tensor.shape[1:]))
+        m = float(b_tensor.shape[0] * np.prod(b_tensor.shape[2:]))
+
+        if rank <= 0.0 or n <= 0.0 or m <= 0.0:
+            continue
+
+        projection_flops += 2.0 * m * n * rank
+
+    return float(projection_flops)
 
 
 def estimate_fedavg_aggregation_and_update_flops(
