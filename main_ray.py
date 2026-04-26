@@ -4,6 +4,7 @@ from typing import Optional
 
 import torch
 import torch.multiprocessing as mp
+from flwr.common import ndarrays_to_parameters
 
 mp.set_start_method("spawn", force=True)
 from json import dumps
