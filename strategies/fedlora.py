@@ -21,7 +21,9 @@ from utils.utils import (
     estimate_fedavg_aggregation_and_update_flops,
     estimate_serialization_flops,
     estimate_deserialization_flops,
+    estimate_lora_projection_flops_from_payload,
 )
+from utils.lora import get_lora_state_items
 
 class FedLora(FedAvg):
     # pylint: disable=too-many-arguments,too-many-instance-attributes,line-too-long
@@ -106,6 +108,20 @@ class FedLora(FedAvg):
         deserialization_flops_server = float(
             sum(estimate_deserialization_flops(payload) for payload in client_payloads)
         )
+        lora_state_keys = []
+        eval_model = getattr(self.evaluate_fn, "model", None)
+        if eval_model is not None:
+            lora_state_items = get_lora_state_items(eval_model)
+            lora_state_keys = [name for name, _ in lora_state_items]
+        decompression_flops_server = float(
+            sum(
+                estimate_lora_projection_flops_from_payload(payload, lora_state_keys)
+                for payload in client_payloads
+            )
+        )
+        compression_flops_server = estimate_lora_projection_flops_from_payload(
+            aggregated_ndarrays, lora_state_keys
+        )
 
         # Aggregate custom metrics if aggregation fn was provided
         metrics_aggregated = {}
@@ -116,8 +132,8 @@ class FedLora(FedAvg):
             metrics_aggregated["update_flops_round_server"] = float(update_flops)
             metrics_aggregated["serialization_flops_round_server"] = float(serialization_flops_server)
             metrics_aggregated["deserialization_flops_round_server"] = float(deserialization_flops_server)
-            metrics_aggregated["compression_flops_round_server"] = 0.0
-            metrics_aggregated["decompression_flops_round_server"] = 0.0
+            metrics_aggregated["compression_flops_round_server"] = float(compression_flops_server)
+            metrics_aggregated["decompression_flops_round_server"] = float(decompression_flops_server)
             metrics_aggregated["intermediate_communication_processing_flops_round_server"] = 0.0
             if metrics_aggregated:
                 maybe_log_to_wandb(metrics_aggregated, step=server_round)
