@@ -1,10 +1,12 @@
 import gc
+import random
 import traceback
 
 from typing import Any, Iterable, Optional
 
 
 import torch
+import numpy as np
 from prune import prune
 from utils.utils import (
     set_params,
@@ -62,6 +64,50 @@ def _validate_parameter_layout(parameters, model: torch.nn.Module, fedbn: bool, 
                 f"Parameter shape mismatch at index {idx} ('{expected_name}') for model "
                 f"'{model_name}': received {received_shape}, expected {expected_shape}."
             )
+
+
+def _validate_lora_parameter_layout(parameters, model: torch.nn.Module, model_name: str):
+    """Validate incoming LoRA payload against PEFT state layout."""
+
+    if parameters is None:
+        return
+
+    expected = get_lora_state_items(model)
+    expected_count = len(expected)
+    received_count = len(parameters)
+
+    if received_count != expected_count:
+        raise ValueError(
+            f"Received {received_count} LoRA tensors, but model '{model_name}' expects "
+            f"{expected_count}. Check that server/client share the same LoRA config."
+        )
+
+    for idx, (expected_name, expected_tensor) in enumerate(expected):
+        received_param = parameters[idx]
+        expected_shape = tuple(expected_tensor.shape)
+        received_shape = tuple(getattr(received_param, "shape", ()))
+        if received_shape != expected_shape:
+            raise ValueError(
+                f"LoRA parameter shape mismatch at index {idx} ('{expected_name}') for model "
+                f"'{model_name}': received {received_shape}, expected {expected_shape}."
+            )
+
+
+def _is_lora_payload(parameters, model: torch.nn.Module) -> bool:
+    """Return ``True`` when ``parameters`` match LoRA payload layout."""
+
+    if parameters is None:
+        return False
+
+    expected = get_lora_state_items(model)
+    if len(parameters) != len(expected):
+        return False
+
+    for idx, (_, expected_tensor) in enumerate(expected):
+        if tuple(getattr(parameters[idx], "shape", ())) != tuple(expected_tensor.shape):
+            return False
+
+    return True
 
 
 def _resolve_device(device_hint):
@@ -381,6 +427,13 @@ def _estimate_lora_training_and_communication(
 
 def mp_fit(info, fl_info,config, parameters, return_dict):
     try:
+        base_seed = int(getattr(fl_info, "seed", 5))
+        random.seed(base_seed)
+        np.random.seed(base_seed)
+        torch.manual_seed(base_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(base_seed)
+
         use_prune = fl_info.prune
         use_prune_srv = fl_info.prune_srv
         device = _resolve_device(fl_info.device if hasattr(fl_info, "device") else "cpu")
@@ -395,15 +448,36 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
             fakequant_trainable_channel(net,fl_info.quant_bits)
 
         if parameters is not None:
-            _validate_parameter_layout(
-                parameters,
-                net,
-                fedbn=info.fedbn,
-                model_name=getattr(info, "model", "unknown"),
-            )
-            if use_prune_srv:
-                parameters = prune(parameters,config["prate"])
-            set_params(net, parameters,fedbn=info.fedbn)
+            if fl_info.lora_config is not None:
+                if _is_lora_payload(parameters, net):
+                    _validate_lora_parameter_layout(
+                        parameters,
+                        net,
+                        model_name=getattr(info, "model", "unknown"),
+                    )
+                    if use_prune_srv:
+                        parameters = prune(parameters,config["prate"])
+                    set_lora_params(net, parameters)
+                else:
+                    _validate_parameter_layout(
+                        parameters,
+                        net,
+                        fedbn=info.fedbn,
+                        model_name=getattr(info, "model", "unknown"),
+                    )
+                    if use_prune_srv:
+                        parameters = prune(parameters,config["prate"])
+                    set_params(net, parameters,fedbn=info.fedbn)
+            else:
+                _validate_parameter_layout(
+                    parameters,
+                    net,
+                    fedbn=info.fedbn,
+                    model_name=getattr(info, "model", "unknown"),
+                )
+                if use_prune_srv:
+                    parameters = prune(parameters,config["prate"])
+                set_params(net, parameters,fedbn=info.fedbn)
 
         net.to(device)
 
@@ -495,7 +569,10 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
         if fl_info.apply_quant: 
             fakequant_trainable_channel(net,fl_info.quant_bits)
 
-        params = get_params(net,fedbn=info.fedbn)
+        if fl_info.lora_config is not None:
+            params = get_lora_params(net)
+        else:
+            params = get_params(net,fedbn=info.fedbn)
 
         if use_prune:
             params = prune(params,config["prate"])

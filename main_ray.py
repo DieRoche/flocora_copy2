@@ -1,4 +1,5 @@
 import multiprocessing
+import random
 from argparse import Namespace
 from typing import Optional
 
@@ -18,7 +19,8 @@ from utils.file_name import gen_filename, gen_run_name
 from utils.server import *
 from log import logger, HFILE
 from utils.strats import Evaluate, EvaluateLora, get_evaluate_fn
-from utils.simple_quant import original_msg_size, quant_msg_size
+from utils.simple_quant import original_msg_size
+from utils.lora import get_lora_params
 
 args: Optional[Namespace] = None
 client_lr: float = 0.0
@@ -75,6 +77,11 @@ def build_server_info(test_set,knn_set=None):
 if __name__ == "__main__":
     saddr = "0.0.0.0:8080"
     args = args_module.parse_and_cache_args()
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
     client_lr = args.cl_lr
     processes = []
 
@@ -211,12 +218,8 @@ if __name__ == "__main__":
         total_nb_params = _total
         trainable_params = 100 * _trainable / _total
 
-        if args.apply_quant:
-            model_size = quant_msg_size(server_model,bits=args.quant_bits)
-        else:
-            model_size = original_msg_size(server_model)
-
-
+        initial_lora_params = get_lora_params(server_model)
+        model_size = compute_payload_size_bytes(initial_lora_params)
         kwargs_dict["initial_parameters"] = get_tensor_parameters(server_model,args.fedbn)
 
         # evaluate = get_evaluate_fn(server_model, test_set, device)
@@ -276,6 +279,7 @@ if __name__ == "__main__":
             prune_srv=args.prune_srv,
             strategy=args.strategy,
             lora_config = lora_config,
+            seed=args.seed,
             nworkers=args.nworkers,
             apply_quant=args.apply_quant,
             quant_bits=args.quant_bits,
