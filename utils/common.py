@@ -415,17 +415,6 @@ def create_lda_partitions(
     x, y = shuffle(x, y)
     x, y = sort_by_label(x, y)
 
-    if (x.shape[0] % num_partitions) and (not accept_imbalanced):
-        raise ValueError(
-            """Total number of samples must be a multiple of `num_partitions`.
-               If imbalanced classes are allowed, set
-               `accept_imbalanced=True`."""
-        )
-
-    num_samples = num_partitions * [0]
-    for j in range(x.shape[0]):
-        num_samples[j % num_partitions] += 1
-
     # Get number of classes and verify if they matching with
     classes, start_indices = np.unique(y, return_index=True)
 
@@ -472,14 +461,41 @@ def create_lda_partitions(
                   of partitions and classes ({num_partitions},{classes.size})"""
             )
 
-    # Assuming balanced distribution
-    empty_classes = classes.size * [False]
+    # Allocate each class across clients according to the Dirichlet draw for that
+    # class (column-wise normalization of client->class preferences). This allows
+    # heterogeneous client dataset sizes instead of forcing near-equal sample counts.
+    partition_data: List[List[np.ndarray]] = [[] for _ in range(num_partitions)]
+    partition_targets: List[List[np.ndarray]] = [[] for _ in range(num_partitions)]
+    rng = np.random.default_rng(seed)
+
+    for class_idx, class_samples in enumerate(list_samples_per_class):
+        if len(class_samples) == 0:
+            continue
+
+        class_prob = dirichlet_dist[:, class_idx].astype(np.float64)
+        prob_sum = float(np.sum(class_prob))
+        if prob_sum <= 0.0:
+            class_prob = np.ones(num_partitions, dtype=np.float64) / float(num_partitions)
+        else:
+            class_prob = class_prob / prob_sum
+
+        class_counts = rng.multinomial(len(class_samples), class_prob)
+        cursor = 0
+        for partition_id, count in enumerate(class_counts.tolist()):
+            if count <= 0:
+                continue
+            selected = class_samples[cursor : cursor + count]
+            cursor += count
+            partition_data[partition_id].extend(selected)
+            partition_targets[partition_id].extend([class_idx] * count)
+
     for partition_id in range(num_partitions):
-        partitions[partition_id], empty_classes = sample_without_replacement(
-            distribution=dirichlet_dist[partition_id].copy(),
-            list_samples=list_samples_per_class,
-            num_samples=num_samples[partition_id],
-            empty_classes=empty_classes,
-        )
+        if len(partition_data[partition_id]) == 0:
+            data_array = np.array([], dtype=x.dtype)
+            target_array = np.array([], dtype=np.int64)
+        else:
+            data_array = np.asarray(partition_data[partition_id])
+            target_array = np.asarray(partition_targets[partition_id], dtype=np.int64)
+        partitions[partition_id] = (data_array, target_array)
 
     return partitions, dirichlet_dist
