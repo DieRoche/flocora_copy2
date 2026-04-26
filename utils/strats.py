@@ -167,9 +167,10 @@ def _build_traffic_metrics(
 class Evaluate:
     def __init__(self, model, test_set, device, args: Namespace):
         self.args = args
+        eval_batch_size = int(getattr(args, "batch_size", 256))
         self.test_loader = DataLoader(
             test_set,
-            batch_size=256,
+            batch_size=eval_batch_size,
             shuffle=False,
             pin_memory=True,
             num_workers=args.nworkers,
@@ -206,9 +207,10 @@ class Evaluate:
 class EvaluateLora:
     def __init__(self, model, lora_config, test_set, device, args: Namespace):
         self.args = args
+        eval_batch_size = int(getattr(args, "batch_size", 256))
         self.test_loader = DataLoader(
             test_set,
-            batch_size=256,
+            batch_size=eval_batch_size,
             shuffle=False,
             pin_memory=True,
             num_workers=args.nworkers,
@@ -261,10 +263,11 @@ class EvaluateLora:
 
 def get_evaluate_fn(model, test_set, device, args: Namespace):
     """Return an evaluation function for server-side evaluation."""
+    eval_batch_size = int(getattr(args, "batch_size", 256))
 
     test_loader = DataLoader(
         test_set,
-        batch_size=256,
+        batch_size=eval_batch_size,
         shuffle=False,
         pin_memory=True,
         num_workers=args.nworkers,
