@@ -426,6 +426,11 @@ def _estimate_lora_training_and_communication(
 
 
 def mp_fit(info, fl_info,config, parameters, return_dict):
+    net = None
+    trainloader = None
+    optimizer = None
+    criterion = None
+    sample_input = None
     try:
         base_seed = int(getattr(fl_info, "seed", 5))
         random.seed(base_seed)
@@ -603,9 +608,9 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
         return_dict["params"] = params
         return_dict["size"] = len(trainloader.dataset)
         return_dict["metrics"] = flop_metrics
-
-        del net, trainloader, optimizer, criterion
-        cleanup_memory()
     except Exception as ex:
         return_dict["error"] = str(ex)
         return_dict["traceback"] = traceback.format_exc()
+    finally:
+        del net, trainloader, optimizer, criterion, sample_input
+        cleanup_memory()

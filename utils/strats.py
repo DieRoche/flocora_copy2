@@ -96,11 +96,21 @@ def _resolve_clients_per_round(args: Namespace, config: Optional[Mapping[str, An
     if pool_size <= 0:
         return 0.0
 
-    # Match FedAvg.num_fit_clients/main_ray sampled_clients: the initial
-    # full-model LoRA payload is sent through configure_fit to sampled clients,
-    # not to every configured client when samp_rate < 1.
+    # Match FedAvg.num_fit_clients/main_ray sampled_clients for recurring
+    # per-round traffic after the one-time frozen-base-model initialization.
     clients_per_round = max(1, int(pool_size * sample_rate))
     return float(clients_per_round)
+
+
+def _resolve_total_clients(args: Namespace) -> float:
+    """Return the total configured client population size."""
+
+    try:
+        total_clients = float(getattr(args, "num_clients", 0) or 0)
+    except (TypeError, ValueError):
+        total_clients = 0.0
+
+    return max(0.0, total_clients)
 
 
 def _resolve_communication_steps(
@@ -167,19 +177,30 @@ def _build_traffic_metrics(
 ) -> Dict[str, float]:
     """Return server-side traffic metrics that are not tied to fit results.
 
-    For LoRA strategies the initial full-model download is represented at round
-    0, but Flower sends that payload through the first configure_fit call only to
-    the sampled clients. Subsequent fit traffic is measured from the clients that
-    actually return a result.
+    For LoRA strategies, the paper-level accounting assumes every client already
+    has a frozen base model copy after a one-time initialization broadcast. That
+    round-0 cost is therefore full_model_size * total_clients, independent of the
+    sampled clients per training round. Subsequent fit traffic is measured from
+    the clients that actually return a result.
     """
 
     strategy = str(getattr(args, "strategy", "")).lower()
     if server_round != 0 or strategy not in {"fedlora", "fedloha"}:
         return {}
 
-    download_traffic_per_client = _compute_model_payload_size(parameters)
-    sampled_clients = _resolve_clients_per_round(args, config)
-    download_traffic = download_traffic_per_client * sampled_clients
+    fallback_full_model_size = _compute_model_payload_size(parameters)
+    download_traffic_per_client = _ensure_float(
+        getattr(args, "initial_w_size_bytes", fallback_full_model_size)
+    )
+    if download_traffic_per_client < 0.0:
+        download_traffic_per_client = fallback_full_model_size
+
+    total_clients = _resolve_total_clients(args)
+    download_traffic = download_traffic_per_client * total_clients
+    recurring_flocora_tcc = _ensure_float(getattr(args, "recurring_flocora_tcc", 0.0))
+    total_flocora_tcc = _ensure_float(
+        getattr(args, "total_flocora_tcc", download_traffic + recurring_flocora_tcc)
+    )
 
     return {
         "upload_traffic": 0.0,
@@ -187,6 +208,11 @@ def _build_traffic_metrics(
         "overall_traffic": float(download_traffic),
         "upload_traffic_per_client": 0.0,
         "download_traffic_per_client": float(download_traffic_per_client),
+        "initial_w_traffic": float(download_traffic),
+        "initial_w_traffic_per_client": float(download_traffic_per_client),
+        "recurring_FLoCoRA_TCC": float(recurring_flocora_tcc),
+        "total_FLoCoRA_TCC": float(total_flocora_tcc),
+        "total_clients": float(total_clients),
     }
 
 

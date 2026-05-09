@@ -147,20 +147,31 @@ There is no custom network socket stack; Flower simulation handles transport. Th
 
 ### `upload_traffic_per_client`
 
-In active evaluation logging, `upload_traffic_per_client` is set to `model_size_bytes` derived by summing ndarray sizes of **server-evaluation parameters argument** (not measured wire bytes).
+For recurring FLoCoRA rounds, `upload_traffic_per_client` is derived from the client payload size `size(A + B + norm + FC)` (not measured wire bytes).
 
 ### `upload_traffic`
 
-Computed as:
+Computed per recurring round as:
 
-`upload_traffic = model_size_bytes * clients_per_round`
+`upload_traffic = size(A + B + norm + FC) * clients_per_round`
 
 where `clients_per_round` resolves from config or `num_clients * samp_rate` fallback.
 
-### Active-vs-total users check
+### Initial frozen-base-model cost
 
-- The multiplication uses estimated sampled clients per round (`clients_per_round`), not total users by default.
-- However, this is still an estimate based on configuration, not actual per-round sampled client count from Flower callbacks.
+The paper-level accounting assumes every client has a copy of the frozen base model `W`, so the round-0 initialization cost is a one-time population-wide distribution:
+
+`initial_W_cost = full_model_size * total_clients`
+
+For the ResNet-18 case, this means `size(ResNet18 full model) * total_clients`; it is not multiplied by `sampled_clients * num_rounds` and not by `sampled_clients * num_clients`.
+
+### Recurring FLoCoRA traffic
+
+After initialization, recurring total communication cost is tracked as:
+
+`recurring_FLoCoRA_TCC = 2 * num_rounds * sampled_clients * size(A + B + norm + FC)`
+
+The factor of `2` accounts for one upload and one download per participating client per round.
 
 ### Reality check
 
@@ -222,16 +233,25 @@ No method-specific server-to-client payload transform is applied beyond Flower p
 
 ### Logged formulas
 
-In traffic builder logic:
+In traffic builder logic for FLoCoRA/FedLoRA round 0:
 
-- `download_traffic = model_size_bytes * clients_per_round`
+- `download_traffic = full_model_size * total_clients`
+- `initial_w_traffic = download_traffic`
+- `overall_traffic = initial_w_traffic`
+
+For recurring rounds, client fit metrics provide:
+
+- `upload_traffic = size(A + B + norm + FC) * sampled_clients`
+- `download_traffic = size(A + B + norm + FC) * sampled_clients`
 - `overall_traffic = upload_traffic + download_traffic`
+
+The run summary also records `recurring_FLoCoRA_TCC = 2 * num_rounds * sampled_clients * size(A + B + norm + FC)` and `total_FLoCoRA_TCC = initial_W_cost + recurring_FLoCoRA_TCC`.
 
 ### Validation
 
-- Formula relation (`overall = upload + download`) is implemented.
-- `download_traffic` is estimated from ndarray size of model parameters, not measured from true transmitted payload encoding.
-- At run-end summary (`tell_history`), overall traffic mixes per-round and full-run values (upload/download reported as per-round; overall reported as total over rounds), which can be semantically inconsistent.
+- The round-0 frozen-base-model cost is one-time and total-client based.
+- Recurring traffic is sampled-client and round based.
+- Traffic is estimated from ndarray size/model-size accounting, not measured from true transmitted payload encoding.
 
 ---
 
