@@ -326,14 +326,6 @@ if __name__ == "__main__":
             per_client_gpus = max(0.0, float(args.ray_gpu))
         per_client_gpus = min(per_client_gpus, float(visible_gpus))
 
-    if args.no_thread:
-        # ``no_thread`` runs client work in the Ray client actor instead of a
-        # short-lived child process. Reserve all visible resources per client so
-        # Ray schedules sampled clients sequentially and releases memory between
-        # clients via ``cleanup_memory`` in ``mp_fit``.
-        per_client_cpus = float(total_cpus)
-        per_client_gpus = 0.0 if args.only_cpu or visible_gpus == 0 else float(visible_gpus)
-
     client_resources = {"num_cpus": per_client_cpus, "num_gpus": per_client_gpus}
 
     logger.debug(f"Client resources resolved to: {client_resources}")
