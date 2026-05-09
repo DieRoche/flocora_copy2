@@ -568,7 +568,6 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
             "flops_decompression": decompression_flops,
             "compression_flops_round_clients": compression_flops,
             "decompression_flops_round_clients": decompression_flops,
-            "intermediate_communication_processing_flops_round_clients": 0.0,
             "communication_lora_size_round_clients": float(lora_communication_size),
             "sum_flops_epoch_includingcompdecomp": sum_epoch_including_comp,
         }

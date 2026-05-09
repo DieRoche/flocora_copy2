@@ -166,8 +166,6 @@ if __name__ == "__main__":
     full_model_size = 0.0
     flocora_payload_size = 0.0
     initial_w_cost = 0.0
-    recurring_flocora_tcc = 0.0
-    total_flocora_tcc = 0.0
     trainable_params = 100
     total_nb_params = -1
 
@@ -230,13 +228,9 @@ if __name__ == "__main__":
         flocora_payload_size = compute_payload_size_bytes(initial_lora_params)
         model_size = flocora_payload_size
         initial_w_cost = float(full_model_size * pool_size)
-        recurring_flocora_tcc = float(2.0 * args.num_rounds * sampled_clients * flocora_payload_size)
-        total_flocora_tcc = float(initial_w_cost + recurring_flocora_tcc)
         args.initial_w_size_bytes = float(full_model_size)
         args.flocora_payload_size_bytes = float(flocora_payload_size)
         args.initial_w_cost = initial_w_cost
-        args.recurring_flocora_tcc = recurring_flocora_tcc
-        args.total_flocora_tcc = total_flocora_tcc
         kwargs_dict["initial_parameters"] = get_tensor_parameters(server_model,args.fedbn)
 
         # evaluate = get_evaluate_fn(server_model, test_set, device)
@@ -346,8 +340,6 @@ if __name__ == "__main__":
         wandb.config["full_model_size_bytes"] = full_model_size
         wandb.config["flocora_payload_size_bytes"] = flocora_payload_size
         wandb.config["initial_W_cost"] = initial_w_cost
-        wandb.config["recurring_FLoCoRA_TCC"] = recurring_flocora_tcc
-        wandb.config["total_FLoCoRA_TCC"] = total_flocora_tcc
         wandb.config["total_nb_params"] = total_nb_params
         wandb.config["trainable"] = trainable_params
 
@@ -364,12 +356,9 @@ if __name__ == "__main__":
         "model_size_bytes": model_size if model_size > 0 else 0.0,
         "full_model_size_bytes": float(full_model_size),
         "flocora_payload_size_bytes": float(flocora_payload_size),
-        "total_clients": float(pool_size),
         "clients_per_round": float(clients_per_round),
         "num_rounds": float(args.num_rounds),
         "initial_W_cost": float(initial_w_cost),
-        "recurring_FLoCoRA_TCC": float(recurring_flocora_tcc),
-        "total_FLoCoRA_TCC": float(total_flocora_tcc),
     }
     tell_history(
         hist,
