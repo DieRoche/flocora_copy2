@@ -42,7 +42,7 @@ from flwr.server.strategy import Strategy
 from utils.strats import exp_step
 from utils.utils import (
     maybe_log_to_wandb,
-    estimate_fedavg_aggregation_and_update_flops,
+    estimate_fedavg_aggregation_flops,
     estimate_serialization_flops,
     estimate_deserialization_flops,
 )
@@ -243,7 +243,7 @@ class FedExp(Strategy):
         # self.parameters = aggregate(weights_results)
         self.parameters = exp_step(self.parameters,client_params)
         parameters_aggregated = ndarrays_to_parameters(self.parameters)
-        aggregation_flops, update_flops = estimate_fedavg_aggregation_and_update_flops(client_params)
+        aggregation_flops = estimate_fedavg_aggregation_flops(client_params)
         serialization_flops_server = estimate_serialization_flops(self.parameters)
         deserialization_flops_server = float(
             sum(estimate_deserialization_flops(payload) for payload in client_params)
@@ -255,12 +255,10 @@ class FedExp(Strategy):
             fit_metrics = [(res.num_examples, res.metrics) for _, res in results]
             metrics_aggregated = self.fit_metrics_aggregation_fn(fit_metrics)
             metrics_aggregated["aggregation_flops_round_server"] = float(aggregation_flops)
-            metrics_aggregated["update_flops_round_server"] = float(update_flops)
             metrics_aggregated["serialization_flops_round_server"] = float(serialization_flops_server)
             metrics_aggregated["deserialization_flops_round_server"] = float(deserialization_flops_server)
             metrics_aggregated["compression_flops_round_server"] = 0.0
             metrics_aggregated["decompression_flops_round_server"] = 0.0
-            metrics_aggregated["intermediate_communication_processing_flops_round_server"] = 0.0
             if metrics_aggregated:
                 maybe_log_to_wandb(metrics_aggregated, step=server_round)
         elif server_round == 1:  # Only log this warning once

@@ -42,7 +42,7 @@ from flwr.server.strategy import Strategy
 from utils.utils import (
     get_random_guess_perf,
     maybe_log_to_wandb,
-    estimate_fedavg_aggregation_and_update_flops,
+    estimate_fedavg_aggregation_flops,
     estimate_serialization_flops,
     estimate_deserialization_flops,
 )
@@ -257,7 +257,7 @@ class FedAvg(Strategy):
         parameters_aggregated = ndarrays_to_parameters(aggregate(weights_results))
         aggregated_ndarrays = parameters_to_ndarrays(parameters_aggregated)
         client_payloads = [parameters_to_ndarrays(fit_res.parameters) for _, fit_res in results]
-        aggregation_flops, update_flops = estimate_fedavg_aggregation_and_update_flops(client_payloads)
+        aggregation_flops = estimate_fedavg_aggregation_flops(client_payloads)
         serialization_flops_server = estimate_serialization_flops(aggregated_ndarrays)
         deserialization_flops_server = float(
             sum(estimate_deserialization_flops(payload) for payload in client_payloads)
@@ -279,12 +279,10 @@ class FedAvg(Strategy):
                 metrics_aggregated["upload_traffic_per_client"] = 0.0
                 metrics_aggregated["download_traffic_per_client"] = 0.0
             metrics_aggregated["aggregation_flops_round_server"] = float(aggregation_flops)
-            metrics_aggregated["update_flops_round_server"] = float(update_flops)
             metrics_aggregated["serialization_flops_round_server"] = float(serialization_flops_server)
             metrics_aggregated["deserialization_flops_round_server"] = float(deserialization_flops_server)
             metrics_aggregated["compression_flops_round_server"] = 0.0
             metrics_aggregated["decompression_flops_round_server"] = 0.0
-            metrics_aggregated["intermediate_communication_processing_flops_round_server"] = 0.0
             if metrics_aggregated:
                 maybe_log_to_wandb(metrics_aggregated, step=server_round)
         elif server_round == 1:  # Only log this warning once

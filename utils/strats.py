@@ -197,11 +197,6 @@ def _build_traffic_metrics(
 
     total_clients = _resolve_total_clients(args)
     download_traffic = download_traffic_per_client * total_clients
-    recurring_flocora_tcc = _ensure_float(getattr(args, "recurring_flocora_tcc", 0.0))
-    total_flocora_tcc = _ensure_float(
-        getattr(args, "total_flocora_tcc", download_traffic + recurring_flocora_tcc)
-    )
-
     return {
         "upload_traffic": 0.0,
         "download_traffic": float(download_traffic),
@@ -210,9 +205,6 @@ def _build_traffic_metrics(
         "download_traffic_per_client": float(download_traffic_per_client),
         "initial_w_traffic": float(download_traffic),
         "initial_w_traffic_per_client": float(download_traffic_per_client),
-        "recurring_FLoCoRA_TCC": float(recurring_flocora_tcc),
-        "total_FLoCoRA_TCC": float(total_flocora_tcc),
-        "total_clients": float(total_clients),
     }
 
 

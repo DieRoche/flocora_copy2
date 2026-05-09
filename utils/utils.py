@@ -2,7 +2,6 @@ import re
 import torch
 import numpy as np
 from collections import OrderedDict, defaultdict
-import csv
 from utils.models import model_selection
 from utils.dcs import *
 from models.projector import Project
@@ -97,6 +96,7 @@ def pile_str(line, item):
     return "_".join([line, item])
 
 
+
 def aggregate_client_metrics(
     metrics: Iterable[Tuple[int, Mapping[str, object]]]
 ) -> Dict[str, float]:
@@ -133,16 +133,13 @@ def aggregate_client_metrics(
         "deserialization_flops_round_clients",
         "compression_flops_round_clients",
         "decompression_flops_round_clients",
-        "intermediate_communication_processing_flops_round_clients",
         "communication_lora_size_round_clients",
         "aggregation_flops_round_server",
-        "update_flops_round_server",
         "evaluation_flops_round",
         "serialization_flops_round_server",
         "deserialization_flops_round_server",
         "compression_flops_round_server",
         "decompression_flops_round_server",
-        "intermediate_communication_processing_flops_round_server",
     }
 
     for num_examples, client_metrics in metrics:
@@ -161,12 +158,10 @@ def aggregate_client_metrics(
 
     training_flops_round_clients = float(totals.get("flops_by_epoch", 0.0))
     aggregation_flops_round_server = float(totals.get("aggregation_flops_round_server", 0.0))
-    update_flops_round_server = float(totals.get("update_flops_round_server", 0.0))
     evaluation_flops_round = float(totals.get("evaluation_flops_round", 0.0))
     round_flops = float(
         training_flops_round_clients
         + aggregation_flops_round_server
-        + update_flops_round_server
         + evaluation_flops_round
     )
 
@@ -182,13 +177,6 @@ def aggregate_client_metrics(
         totals.get("decompression_flops_round_clients", totals.get("flops_decompression", 0.0))
     )
     decompression_flops_round_server = float(totals.get("decompression_flops_round_server", 0.0))
-    intermediate_comm_flops_round_clients = float(
-        totals.get("intermediate_communication_processing_flops_round_clients", 0.0)
-    )
-    intermediate_comm_flops_round_server = float(
-        totals.get("intermediate_communication_processing_flops_round_server", 0.0)
-    )
-
     round_flops_compression = float(
         serialization_flops_round_clients
         + serialization_flops_round_server
@@ -198,8 +186,6 @@ def aggregate_client_metrics(
         + compression_flops_round_server
         + decompression_flops_round_clients
         + decompression_flops_round_server
-        + intermediate_comm_flops_round_clients
-        + intermediate_comm_flops_round_server
     )
     round_total_flops = float(round_flops + round_flops_compression)
 
@@ -219,7 +205,6 @@ def aggregate_client_metrics(
     aggregated["total_flops_compression"] = float(running_total_compression)
     aggregated["round_training_flops_clients"] = training_flops_round_clients
     aggregated["aggregation_flops_round_server"] = aggregation_flops_round_server
-    aggregated["update_flops_round_server"] = update_flops_round_server
     aggregated["evaluation_flops_round"] = evaluation_flops_round
     aggregated["serialization_flops_round_clients"] = serialization_flops_round_clients
     aggregated["serialization_flops_round_server"] = serialization_flops_round_server
@@ -229,12 +214,6 @@ def aggregate_client_metrics(
     aggregated["compression_flops_round_server"] = compression_flops_round_server
     aggregated["decompression_flops_round_clients"] = decompression_flops_round_clients
     aggregated["decompression_flops_round_server"] = decompression_flops_round_server
-    aggregated["intermediate_communication_processing_flops_round_clients"] = (
-        intermediate_comm_flops_round_clients
-    )
-    aggregated["intermediate_communication_processing_flops_round_server"] = (
-        intermediate_comm_flops_round_server
-    )
     aggregated["communication_lora_size_round_clients"] = float(
         totals.get("communication_lora_size_round_clients", 0.0)
     )
@@ -419,108 +398,25 @@ def estimate_lora_projection_flops_from_payload(
     return float(projection_flops)
 
 
-def estimate_fedavg_aggregation_and_update_flops(
+def estimate_fedavg_aggregation_flops(
     client_payloads: Sequence[Sequence[np.ndarray]],
-) -> Tuple[float, float]:
-    """Estimate server aggregation/update FLOPs for elementwise weighted averaging."""
+) -> float:
+    """Estimate server aggregation FLOPs for elementwise weighted averaging."""
 
     if not client_payloads:
-        return 0.0, 0.0
+        return 0.0
 
     num_clients = len(client_payloads)
-    first_payload = client_payloads[0]
     aggregation_flops = 0.0
-    update_flops = 0.0
 
-    for tensor in first_payload:
+    for tensor in client_payloads[0]:
         tensor_array = np.asarray(tensor)
         num_elements = float(tensor_array.size)
         if num_elements <= 0.0:
             continue
         aggregation_flops += num_elements * float(max(num_clients - 1, 0))
-        update_flops += num_elements
 
-    return float(aggregation_flops), float(update_flops)
-
-
-def _round_metrics_output_path(runtime_args: Namespace) -> Path:
-    base_path = Path(getattr(runtime_args, "path_results", "results/"))
-    base_path.mkdir(parents=True, exist_ok=True)
-    file_name = getattr(runtime_args, "file_name", "run")
-    return base_path / f"{file_name}_round_flops_metrics.csv"
-
-
-def _persist_round_metrics_log(runtime_args: Namespace, payload: Mapping[str, float]) -> None:
-    fieldnames = [
-        "round",
-        "round_flops",
-        "round_training_flops_clients",
-        "aggregation_flops_round_server",
-        "update_flops_round_server",
-        "evaluation_flops_round",
-        "round_flops_compression",
-        "compression_flops_clients",
-        "compression_flops_server",
-        "decompression_flops_clients",
-        "decompression_flops_server",
-        "serialization_flops",
-        "deserialization_flops_round_clients",
-        "deserialization_flops_round_server",
-        "intermediate_communication_processing_flops_round_clients",
-        "intermediate_communication_processing_flops_round_server",
-        "communication_lora_size_round_clients",
-        "total_flops",
-        "total_flops_compression",
-        "acc_servers_highest",
-        "overall_traffic",
-        "upload_traffic",
-        "download_traffic",
-        "upload_traffic_per_client",
-        "download_traffic_per_client",
-        "initial_w_traffic",
-        "initial_w_traffic_per_client",
-        "recurring_FLoCoRA_TCC",
-        "total_FLoCoRA_TCC",
-        "total_clients",
-        "num_fit_results",
-    ]
-    output_path = _round_metrics_output_path(runtime_args)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    row = {field: payload.get(field, "") for field in fieldnames}
-    round_value = row.get("round", "")
-
-    if round_value == "":
-        file_exists = output_path.exists()
-        with output_path.open("a", encoding="utf-8", newline="") as log_file:
-            writer = csv.DictWriter(log_file, fieldnames=fieldnames)
-            if not file_exists:
-                writer.writeheader()
-            writer.writerow(row)
-        return
-
-    rows_by_round: Dict[str, Dict[str, object]] = {}
-    round_order: list[str] = []
-
-    if output_path.exists():
-        with output_path.open("r", encoding="utf-8", newline="") as log_file:
-            reader = csv.DictReader(log_file)
-            for existing_row in reader:
-                existing_round = str(existing_row.get("round", ""))
-                if existing_round not in rows_by_round:
-                    round_order.append(existing_round)
-                normalized_row = {field: existing_row.get(field, "") for field in fieldnames}
-                rows_by_round[existing_round] = normalized_row
-
-    round_key = str(round_value)
-    if round_key not in rows_by_round:
-        round_order.append(round_key)
-    rows_by_round[round_key] = row
-
-    with output_path.open("w", encoding="utf-8", newline="") as log_file:
-        writer = csv.DictWriter(log_file, fieldnames=fieldnames)
-        writer.writeheader()
-        for existing_round in round_order:
-            writer.writerow(rows_by_round[existing_round])
+    return float(aggregation_flops)
 
 
 def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = None) -> None:
@@ -553,9 +449,8 @@ def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = No
 
         training = float(round_state.get("round_training_flops_clients", 0.0))
         aggregation = float(round_state.get("aggregation_flops_round_server", 0.0))
-        update = float(round_state.get("update_flops_round_server", 0.0))
         evaluation = float(round_state.get("evaluation_flops_round", 0.0))
-        round_flops = float(training + aggregation + update + evaluation)
+        round_flops = float(training + aggregation + evaluation)
 
         serialization = float(
             round_state.get("serialization_flops_round_clients", 0.0)
@@ -573,12 +468,8 @@ def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = No
             round_state.get("decompression_flops_round_clients", 0.0)
             + round_state.get("decompression_flops_round_server", 0.0)
         )
-        intermediate_comm = float(
-            round_state.get("intermediate_communication_processing_flops_round_clients", 0.0)
-            + round_state.get("intermediate_communication_processing_flops_round_server", 0.0)
-        )
         round_flops_compression = float(
-            serialization + deserialization + compression + decompression + intermediate_comm
+            serialization + deserialization + compression + decompression
         )
         round_total = float(round_flops + round_flops_compression)
 
@@ -622,7 +513,6 @@ def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = No
             "total_flops_compression",
             "round_training_flops_clients",
             "aggregation_flops_round_server",
-            "update_flops_round_server",
             "evaluation_flops_round",
             "compression_flops_clients",
             "compression_flops_server",
@@ -631,8 +521,6 @@ def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = No
             "serialization_flops",
             "deserialization_flops_round_clients",
             "deserialization_flops_round_server",
-            "intermediate_communication_processing_flops_round_clients",
-            "intermediate_communication_processing_flops_round_server",
             "communication_lora_size_round_clients",
             "acc_servers_highest",
             "overall_traffic",
@@ -642,16 +530,13 @@ def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = No
             "download_traffic_per_client",
             "initial_w_traffic",
             "initial_w_traffic_per_client",
-            "recurring_FLoCoRA_TCC",
-            "total_FLoCoRA_TCC",
-            "total_clients",
             "num_fit_results",
         ):
             if key in round_state:
                 log_payload[key] = round_state[key]
 
-        log_payload["round"] = float(step)
-        _persist_round_metrics_log(runtime_args, log_payload)
+    if not log_payload:
+        return
 
     import wandb
 
@@ -748,34 +633,18 @@ def tell_history(
 
     if report_metadata:
         full_model_size = float(report_metadata.get("full_model_size_bytes", 0.0) or 0.0)
-        total_clients = float(report_metadata.get("total_clients", 0.0) or 0.0)
         flocora_payload_size = float(report_metadata.get("flocora_payload_size_bytes", 0.0) or 0.0)
         clients_per_round = float(report_metadata.get("clients_per_round", 0.0) or 0.0)
         num_rounds = float(report_metadata.get("num_rounds", 0.0) or 0.0)
 
-        initial_w_cost = float(
-            report_metadata.get("initial_W_cost", full_model_size * total_clients)
-        )
-        recurring_flocora_tcc = float(
-            report_metadata.get(
-                "recurring_FLoCoRA_TCC",
-                2.0 * num_rounds * clients_per_round * flocora_payload_size,
-            )
-        )
-        total_flocora_tcc = float(
-            report_metadata.get("total_FLoCoRA_TCC", initial_w_cost + recurring_flocora_tcc)
-        )
-
+        initial_w_cost = float(report_metadata.get("initial_W_cost", 0.0) or 0.0)
         report.update(
             {
                 "full_model_size_bytes": full_model_size,
-                "total_clients": total_clients,
                 "flocora_payload_size_bytes": flocora_payload_size,
                 "clients_per_round": clients_per_round,
                 "num_rounds": num_rounds,
                 "initial_W_cost": initial_w_cost,
-                "recurring_FLoCoRA_TCC": recurring_flocora_tcc,
-                "total_FLoCoRA_TCC": total_flocora_tcc,
             }
         )
 
