@@ -447,9 +447,11 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
         if fl_info.apply_quant:
             fakequant_trainable_channel(net,fl_info.quant_bits)
 
+        received_lora_payload = False
         if parameters is not None:
             if fl_info.lora_config is not None:
-                if _is_lora_payload(parameters, net):
+                received_lora_payload = _is_lora_payload(parameters, net)
+                if received_lora_payload:
                     _validate_lora_parameter_layout(
                         parameters,
                         net,
@@ -579,6 +581,16 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
 
         upload_traffic = compute_payload_size_bytes(params)
         download_traffic = compute_payload_size_bytes(parameters)
+        server_round = int(config.get("server_round", 0) or 0)
+        if (
+            fl_info.lora_config is not None
+            and server_round == 1
+            and not received_lora_payload
+        ):
+            # The abnormal first full-model download is accounted at round 0.
+            # From round 1 onward, report the conceptual LoRA payload size
+            # (A/B matrices plus PEFT modules_to_save, e.g. ablation mode 2).
+            download_traffic = compute_payload_size_bytes(params)
         serialization_flops = estimate_serialization_flops(params)
         deserialization_flops = estimate_deserialization_flops(parameters)
         flop_metrics["serialization_flops_round_clients"] = float(serialization_flops)

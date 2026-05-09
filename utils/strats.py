@@ -87,17 +87,20 @@ def _resolve_clients_per_round(args: Namespace, config: Optional[Mapping[str, An
             return value
 
     try:
-        pool_size = float(getattr(args, "num_clients", 0.0))
-        sample_rate = float(getattr(args, "samp_rate", 0.0))
+        pool_size = int(getattr(args, "num_clients", 0) or 0)
+        sample_rate = float(getattr(args, "samp_rate", 0.0) or 0.0)
     except (TypeError, ValueError):
-        pool_size = 0.0
+        pool_size = 0
         sample_rate = 0.0
 
-    clients_per_round = pool_size * sample_rate
-    if clients_per_round <= 0 and pool_size > 0:
-        clients_per_round = 1.0
+    if pool_size <= 0:
+        return 0.0
 
-    return max(clients_per_round, 0.0)
+    # Match FedAvg.num_fit_clients/main_ray sampled_clients: the initial
+    # full-model LoRA payload is sent through configure_fit to sampled clients,
+    # not to every configured client when samp_rate < 1.
+    clients_per_round = max(1, int(pool_size * sample_rate))
+    return float(clients_per_round)
 
 
 def _resolve_communication_steps(
@@ -157,11 +160,34 @@ def _compute_model_payload_size(parameters: Any) -> float:
 
 
 def _build_traffic_metrics(
-    parameters: Any, args: Namespace, config: Optional[Mapping[str, Any]]
+    parameters: Any,
+    args: Namespace,
+    config: Optional[Mapping[str, Any]],
+    server_round: int,
 ) -> Dict[str, float]:
-    """Traffic metrics are collected from active client fit payloads."""
-    del parameters, args, config
-    return {}
+    """Return server-side traffic metrics that are not tied to fit results.
+
+    For LoRA strategies the initial full-model download is represented at round
+    0, but Flower sends that payload through the first configure_fit call only to
+    the sampled clients. Subsequent fit traffic is measured from the clients that
+    actually return a result.
+    """
+
+    strategy = str(getattr(args, "strategy", "")).lower()
+    if server_round != 0 or strategy not in {"fedlora", "fedloha"}:
+        return {}
+
+    download_traffic_per_client = _compute_model_payload_size(parameters)
+    sampled_clients = _resolve_clients_per_round(args, config)
+    download_traffic = download_traffic_per_client * sampled_clients
+
+    return {
+        "upload_traffic": 0.0,
+        "download_traffic": float(download_traffic),
+        "overall_traffic": float(download_traffic),
+        "upload_traffic_per_client": 0.0,
+        "download_traffic_per_client": float(download_traffic_per_client),
+    }
 
 
 class Evaluate:
@@ -183,7 +209,7 @@ class Evaluate:
         self.model.to(self.device)
         ans = test(self.model, self.test_loader, self.device, track_flops=True)
         metrics = _build_metrics(ans)
-        traffic_metrics = _build_traffic_metrics(parameters, self.args, config)
+        traffic_metrics = _build_traffic_metrics(parameters, self.args, config, server_round)
         if traffic_metrics:
             metrics.update(traffic_metrics)
         loss = metrics.get("distributed_loss")
@@ -245,7 +271,7 @@ class EvaluateLora:
 
         ans = test(self.model, self.test_loader, self.device, track_flops=True)
         metrics = _build_metrics(ans)
-        traffic_metrics = _build_traffic_metrics(parameters, self.args, config)
+        traffic_metrics = _build_traffic_metrics(parameters, self.args, config, server_round)
         if traffic_metrics:
             metrics.update(traffic_metrics)
         loss = metrics.get("distributed_loss")
@@ -281,7 +307,7 @@ def get_evaluate_fn(model, test_set, device, args: Namespace):
         model.to(device)
         ans = test(model, test_loader, device, track_flops=True)
         metrics = _build_metrics(ans)
-        traffic_metrics = _build_traffic_metrics(parameters, args, config)
+        traffic_metrics = _build_traffic_metrics(parameters, args, config, server_round)
         if traffic_metrics:
             metrics.update(traffic_metrics)
         loss = metrics.get("distributed_loss")
