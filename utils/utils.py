@@ -477,6 +477,11 @@ def _persist_round_metrics_log(runtime_args: Namespace, payload: Mapping[str, fl
         "download_traffic",
         "upload_traffic_per_client",
         "download_traffic_per_client",
+        "initial_w_traffic",
+        "initial_w_traffic_per_client",
+        "recurring_FLoCoRA_TCC",
+        "total_FLoCoRA_TCC",
+        "total_clients",
         "num_fit_results",
     ]
     output_path = _round_metrics_output_path(runtime_args)
@@ -635,6 +640,11 @@ def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = No
             "download_traffic",
             "upload_traffic_per_client",
             "download_traffic_per_client",
+            "initial_w_traffic",
+            "initial_w_traffic_per_client",
+            "recurring_FLoCoRA_TCC",
+            "total_FLoCoRA_TCC",
+            "total_clients",
             "num_fit_results",
         ):
             if key in round_state:
@@ -735,6 +745,39 @@ def tell_history(
         report["cos_highest"] = float(report["cos_mean"] + report["cos_std"])
         report.pop("cos_mean", None)
         report.pop("cos_std", None)
+
+    if report_metadata:
+        full_model_size = float(report_metadata.get("full_model_size_bytes", 0.0) or 0.0)
+        total_clients = float(report_metadata.get("total_clients", 0.0) or 0.0)
+        flocora_payload_size = float(report_metadata.get("flocora_payload_size_bytes", 0.0) or 0.0)
+        clients_per_round = float(report_metadata.get("clients_per_round", 0.0) or 0.0)
+        num_rounds = float(report_metadata.get("num_rounds", 0.0) or 0.0)
+
+        initial_w_cost = float(
+            report_metadata.get("initial_W_cost", full_model_size * total_clients)
+        )
+        recurring_flocora_tcc = float(
+            report_metadata.get(
+                "recurring_FLoCoRA_TCC",
+                2.0 * num_rounds * clients_per_round * flocora_payload_size,
+            )
+        )
+        total_flocora_tcc = float(
+            report_metadata.get("total_FLoCoRA_TCC", initial_w_cost + recurring_flocora_tcc)
+        )
+
+        report.update(
+            {
+                "full_model_size_bytes": full_model_size,
+                "total_clients": total_clients,
+                "flocora_payload_size_bytes": flocora_payload_size,
+                "clients_per_round": clients_per_round,
+                "num_rounds": num_rounds,
+                "initial_W_cost": initial_w_cost,
+                "recurring_FLoCoRA_TCC": recurring_flocora_tcc,
+                "total_FLoCoRA_TCC": total_flocora_tcc,
+            }
+        )
 
     if report:
         infos["report"] = report

@@ -163,6 +163,11 @@ if __name__ == "__main__":
     lora_config = None
 
     model_size = -1
+    full_model_size = 0.0
+    flocora_payload_size = 0.0
+    initial_w_cost = 0.0
+    recurring_flocora_tcc = 0.0
+    total_flocora_tcc = 0.0
     trainable_params = 100
     total_nb_params = -1
 
@@ -173,6 +178,7 @@ if __name__ == "__main__":
             args.feature_maps, input_shape, num_classes, batchn=args.batchn
         )
         model_size = original_msg_size(server_model)
+        full_model_size = model_size
         total_nb_params = model_size//4
 
         if args.checkpoint:
@@ -197,6 +203,8 @@ if __name__ == "__main__":
             args.feature_maps, input_shape, num_classes, batchn=args.batchn
         )
 
+        full_model_size = compute_payload_size_bytes(get_params(server_model,args.fedbn))
+
         target_modules, modules_to_save,rank_pattern = gen_rank_pattern(server_model,r=args.lora_r,mode=args.lora_ablation_mode,ratio= args.loha_ratio)
         
         lora_config = LoraInfo(alpha=args.lora_alpha,
@@ -219,7 +227,16 @@ if __name__ == "__main__":
         trainable_params = 100 * _trainable / _total
 
         initial_lora_params = get_lora_params(server_model)
-        model_size = compute_payload_size_bytes(initial_lora_params)
+        flocora_payload_size = compute_payload_size_bytes(initial_lora_params)
+        model_size = flocora_payload_size
+        initial_w_cost = float(full_model_size * pool_size)
+        recurring_flocora_tcc = float(2.0 * args.num_rounds * sampled_clients * flocora_payload_size)
+        total_flocora_tcc = float(initial_w_cost + recurring_flocora_tcc)
+        args.initial_w_size_bytes = float(full_model_size)
+        args.flocora_payload_size_bytes = float(flocora_payload_size)
+        args.initial_w_cost = initial_w_cost
+        args.recurring_flocora_tcc = recurring_flocora_tcc
+        args.total_flocora_tcc = total_flocora_tcc
         kwargs_dict["initial_parameters"] = get_tensor_parameters(server_model,args.fedbn)
 
         # evaluate = get_evaluate_fn(server_model, test_set, device)
@@ -326,6 +343,11 @@ if __name__ == "__main__":
         )
 
         wandb.config["model_size_bytes"] = model_size
+        wandb.config["full_model_size_bytes"] = full_model_size
+        wandb.config["flocora_payload_size_bytes"] = flocora_payload_size
+        wandb.config["initial_W_cost"] = initial_w_cost
+        wandb.config["recurring_FLoCoRA_TCC"] = recurring_flocora_tcc
+        wandb.config["total_FLoCoRA_TCC"] = total_flocora_tcc
         wandb.config["total_nb_params"] = total_nb_params
         wandb.config["trainable"] = trainable_params
 
@@ -340,8 +362,14 @@ if __name__ == "__main__":
     )
     report_metadata = {
         "model_size_bytes": model_size if model_size > 0 else 0.0,
+        "full_model_size_bytes": float(full_model_size),
+        "flocora_payload_size_bytes": float(flocora_payload_size),
+        "total_clients": float(pool_size),
         "clients_per_round": float(clients_per_round),
         "num_rounds": float(args.num_rounds),
+        "initial_W_cost": float(initial_w_cost),
+        "recurring_FLoCoRA_TCC": float(recurring_flocora_tcc),
+        "total_FLoCoRA_TCC": float(total_flocora_tcc),
     }
     tell_history(
         hist,

@@ -59,7 +59,18 @@ def create_parser():
     parser.add_argument("--lr_step", type=float,default=0.0,help="reduction for the learning rate")
     parser.add_argument("--path_results", type=str,default="results/",help="folder to save results")
     parser.add_argument("--id_exp", type=str,default="",help="id for multiple runs")
-    parser.add_argument("--no_thread", action="store_true",help="to launch the fit/eval in the current thread")
+    parser.add_argument(
+        "--no_thread",
+        action="store_true",
+        default=True,
+        help="launch client fit/eval in the current process (default: enabled)",
+    )
+    parser.add_argument(
+        "--child_process",
+        dest="no_thread",
+        action="store_false",
+        help="launch client fit/eval in a child process instead of the current process",
+    )
     parser.add_argument("--file_name", type=str,default="",help="experience's name (optional)")
     parser.add_argument("--skip_gen_training", action="store_true",help="to skip training pt data")
     parser.add_argument("--checkpoint", action="store_true",help="secretly bad")
