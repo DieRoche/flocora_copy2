@@ -87,17 +87,20 @@ def _resolve_clients_per_round(args: Namespace, config: Optional[Mapping[str, An
             return value
 
     try:
-        pool_size = float(getattr(args, "num_clients", 0.0))
-        sample_rate = float(getattr(args, "samp_rate", 0.0))
+        pool_size = int(getattr(args, "num_clients", 0) or 0)
+        sample_rate = float(getattr(args, "samp_rate", 0.0) or 0.0)
     except (TypeError, ValueError):
-        pool_size = 0.0
+        pool_size = 0
         sample_rate = 0.0
 
-    clients_per_round = pool_size * sample_rate
-    if clients_per_round <= 0 and pool_size > 0:
-        clients_per_round = 1.0
+    if pool_size <= 0:
+        return 0.0
 
-    return max(clients_per_round, 0.0)
+    # Match FedAvg.num_fit_clients/main_ray sampled_clients: the initial
+    # full-model LoRA payload is sent through configure_fit to sampled clients,
+    # not to every configured client when samp_rate < 1.
+    clients_per_round = max(1, int(pool_size * sample_rate))
+    return float(clients_per_round)
 
 
 def _resolve_communication_steps(
@@ -164,20 +167,19 @@ def _build_traffic_metrics(
 ) -> Dict[str, float]:
     """Return server-side traffic metrics that are not tied to fit results.
 
-    For LoRA strategies the initial full-model download happens before the first
-    LoRA training round.  Account it at round 0 as a broadcast to every client;
-    subsequent fit traffic is measured from the clients that actually return a
-    result.
+    For LoRA strategies the initial full-model download is represented at round
+    0, but Flower sends that payload through the first configure_fit call only to
+    the sampled clients. Subsequent fit traffic is measured from the clients that
+    actually return a result.
     """
 
-    del config
     strategy = str(getattr(args, "strategy", "")).lower()
     if server_round != 0 or strategy not in {"fedlora", "fedloha"}:
         return {}
 
     download_traffic_per_client = _compute_model_payload_size(parameters)
-    num_clients = max(float(getattr(args, "num_clients", 0.0) or 0.0), 0.0)
-    download_traffic = download_traffic_per_client * num_clients
+    sampled_clients = _resolve_clients_per_round(args, config)
+    download_traffic = download_traffic_per_client * sampled_clients
 
     return {
         "upload_traffic": 0.0,

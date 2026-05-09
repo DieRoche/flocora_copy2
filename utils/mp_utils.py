@@ -587,7 +587,10 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
             and server_round == 1
             and not received_lora_payload
         ):
-            download_traffic = 0.0
+            # The abnormal first full-model download is accounted at round 0.
+            # From round 1 onward, report the conceptual LoRA payload size
+            # (A/B matrices plus PEFT modules_to_save, e.g. ablation mode 2).
+            download_traffic = compute_payload_size_bytes(params)
         serialization_flops = estimate_serialization_flops(params)
         deserialization_flops = estimate_deserialization_flops(parameters)
         flop_metrics["serialization_flops_round_clients"] = float(serialization_flops)
