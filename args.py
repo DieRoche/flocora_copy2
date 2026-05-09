@@ -20,7 +20,7 @@ def create_parser():
     parser.add_argument("--samp_rate", type=float, default=0.1,help="client's sample rate")
     parser.add_argument("--strategy", type = str, default='fedlora',help="which strategy to use (default kept as fedlora for backward compatibility with current server setup)")
     parser.add_argument("--fedbn", action="store_true",help="fed bn strategy for local batchnorm")
-    parser.add_argument("--drop_random", action="store_true",help="drop client's results with random guess")
+    parser.add_argument("--drop_random", action="store_true", default=False,help="drop client's results with random guess")
     parser.add_argument("--bb_only", action="store_true",help="to aggregate backbone only")
     parser.add_argument("--pr_dim",type=int, default=256,help="projection dim for fedct")
     parser.add_argument("--ema", type=float,default=0.0,help="ema's decay")

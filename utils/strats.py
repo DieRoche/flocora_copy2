@@ -157,11 +157,35 @@ def _compute_model_payload_size(parameters: Any) -> float:
 
 
 def _build_traffic_metrics(
-    parameters: Any, args: Namespace, config: Optional[Mapping[str, Any]]
+    parameters: Any,
+    args: Namespace,
+    config: Optional[Mapping[str, Any]],
+    server_round: int,
 ) -> Dict[str, float]:
-    """Traffic metrics are collected from active client fit payloads."""
-    del parameters, args, config
-    return {}
+    """Return server-side traffic metrics that are not tied to fit results.
+
+    For LoRA strategies the initial full-model download happens before the first
+    LoRA training round.  Account it at round 0 as a broadcast to every client;
+    subsequent fit traffic is measured from the clients that actually return a
+    result.
+    """
+
+    del config
+    strategy = str(getattr(args, "strategy", "")).lower()
+    if server_round != 0 or strategy not in {"fedlora", "fedloha"}:
+        return {}
+
+    download_traffic_per_client = _compute_model_payload_size(parameters)
+    num_clients = max(float(getattr(args, "num_clients", 0.0) or 0.0), 0.0)
+    download_traffic = download_traffic_per_client * num_clients
+
+    return {
+        "upload_traffic": 0.0,
+        "download_traffic": float(download_traffic),
+        "overall_traffic": float(download_traffic),
+        "upload_traffic_per_client": 0.0,
+        "download_traffic_per_client": float(download_traffic_per_client),
+    }
 
 
 class Evaluate:
@@ -183,7 +207,7 @@ class Evaluate:
         self.model.to(self.device)
         ans = test(self.model, self.test_loader, self.device, track_flops=True)
         metrics = _build_metrics(ans)
-        traffic_metrics = _build_traffic_metrics(parameters, self.args, config)
+        traffic_metrics = _build_traffic_metrics(parameters, self.args, config, server_round)
         if traffic_metrics:
             metrics.update(traffic_metrics)
         loss = metrics.get("distributed_loss")
@@ -245,7 +269,7 @@ class EvaluateLora:
 
         ans = test(self.model, self.test_loader, self.device, track_flops=True)
         metrics = _build_metrics(ans)
-        traffic_metrics = _build_traffic_metrics(parameters, self.args, config)
+        traffic_metrics = _build_traffic_metrics(parameters, self.args, config, server_round)
         if traffic_metrics:
             metrics.update(traffic_metrics)
         loss = metrics.get("distributed_loss")
@@ -281,7 +305,7 @@ def get_evaluate_fn(model, test_set, device, args: Namespace):
         model.to(device)
         ans = test(model, test_loader, device, track_flops=True)
         metrics = _build_metrics(ans)
-        traffic_metrics = _build_traffic_metrics(parameters, args, config)
+        traffic_metrics = _build_traffic_metrics(parameters, args, config, server_round)
         if traffic_metrics:
             metrics.update(traffic_metrics)
         loss = metrics.get("distributed_loss")

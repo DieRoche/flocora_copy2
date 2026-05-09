@@ -268,6 +268,16 @@ class FedAvg(Strategy):
         if self.fit_metrics_aggregation_fn:
             fit_metrics = [(res.num_examples, res.metrics) for _, res in results]
             metrics_aggregated = self.fit_metrics_aggregation_fn(fit_metrics)
+            num_fit_results = len(results)
+            metrics_aggregated["num_fit_results"] = float(num_fit_results)
+            upload_traffic = float(metrics_aggregated.get("upload_traffic", 0.0))
+            download_traffic = float(metrics_aggregated.get("download_traffic", 0.0))
+            if num_fit_results > 0:
+                metrics_aggregated["upload_traffic_per_client"] = upload_traffic / float(num_fit_results)
+                metrics_aggregated["download_traffic_per_client"] = download_traffic / float(num_fit_results)
+            else:
+                metrics_aggregated["upload_traffic_per_client"] = 0.0
+                metrics_aggregated["download_traffic_per_client"] = 0.0
             metrics_aggregated["aggregation_flops_round_server"] = float(aggregation_flops)
             metrics_aggregated["update_flops_round_server"] = float(update_flops)
             metrics_aggregated["serialization_flops_round_server"] = float(serialization_flops_server)

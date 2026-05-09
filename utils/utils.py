@@ -102,6 +102,7 @@ def aggregate_client_metrics(
 ) -> Dict[str, float]:
     """Aggregate only the metric keys required by W&B reporting."""
 
+    metrics = list(metrics)
     totals: Dict[str, float] = defaultdict(float)
     counts: Dict[str, int] = defaultdict(int)
     aggregated: Dict[str, float] = {}
@@ -120,6 +121,9 @@ def aggregate_client_metrics(
         "client_to_server_density",
         "upload_traffic",
         "download_traffic",
+        "upload_traffic_per_client",
+        "download_traffic_per_client",
+        "num_fit_results",
         "distributed_test_accuracy",
         "distributed_loss",
         "flops_by_epoch",
@@ -265,9 +269,17 @@ def aggregate_client_metrics(
 
     upload_traffic = float(totals.get("upload_traffic", 0.0))
     download_traffic = float(totals.get("download_traffic", 0.0))
+    num_fit_results = sum(1 for _, client_metrics in metrics if isinstance(client_metrics, Mapping))
+    aggregated["num_fit_results"] = float(num_fit_results)
     aggregated["upload_traffic"] = upload_traffic
     aggregated["download_traffic"] = download_traffic
     aggregated["overall_traffic"] = upload_traffic + download_traffic
+    if num_fit_results > 0:
+        aggregated["upload_traffic_per_client"] = upload_traffic / float(num_fit_results)
+        aggregated["download_traffic_per_client"] = download_traffic / float(num_fit_results)
+    else:
+        aggregated["upload_traffic_per_client"] = 0.0
+        aggregated["download_traffic_per_client"] = 0.0
 
     return aggregated
 
@@ -463,6 +475,9 @@ def _persist_round_metrics_log(runtime_args: Namespace, payload: Mapping[str, fl
         "overall_traffic",
         "upload_traffic",
         "download_traffic",
+        "upload_traffic_per_client",
+        "download_traffic_per_client",
+        "num_fit_results",
     ]
     output_path = _round_metrics_output_path(runtime_args)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -618,6 +633,9 @@ def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = No
             "overall_traffic",
             "upload_traffic",
             "download_traffic",
+            "upload_traffic_per_client",
+            "download_traffic_per_client",
+            "num_fit_results",
         ):
             if key in round_state:
                 log_payload[key] = round_state[key]
