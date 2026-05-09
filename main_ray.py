@@ -1,5 +1,7 @@
 import multiprocessing
 import random
+import secrets
+from contextlib import contextmanager
 from argparse import Namespace
 from typing import Optional
 
@@ -73,6 +75,30 @@ def build_server_info(test_set,knn_set=None):
         knn_set=knn_set,
         num_clients=runtime_args.num_clients,
     )
+
+
+@contextmanager
+def random_server_initialization_seed(experiment_seed: int):
+    """Use fresh torch entropy for server model initialization only.
+
+    The surrounding ``torch.random.fork_rng`` restores the experiment-seeded
+    torch RNG state afterwards, so data splitting, client selection, and later
+    training-time randomness remain controlled by ``--seed``.
+    """
+
+    model_seed = secrets.randbits(63)
+    cuda_devices = list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+    logger.info(
+        "Initializing server weights with random model seed %s; preserving experiment seed %s",
+        model_seed,
+        experiment_seed,
+    )
+
+    with torch.random.fork_rng(devices=cuda_devices, enabled=True):
+        torch.manual_seed(model_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(model_seed)
+        yield
 
 if __name__ == "__main__":
     saddr = "0.0.0.0:8080"
@@ -174,9 +200,10 @@ if __name__ == "__main__":
     if args.strategy == "fedavg":
         from strategies.fedavg import FedAvg
 
-        server_model = server_model(
-            args.feature_maps, input_shape, num_classes, batchn=args.batchn
-        )
+        with random_server_initialization_seed(args.seed):
+            server_model = server_model(
+                args.feature_maps, input_shape, num_classes, batchn=args.batchn
+            )
         model_size = original_msg_size(server_model)
         full_model_size = model_size
         total_nb_params = model_size//4
@@ -199,28 +226,29 @@ if __name__ == "__main__":
     elif args.strategy == "fedlora" or  args.strategy == "fedloha":
         from strategies import FedLora
         from utils.lora import inject_low_rank
-        server_model = server_model(
-            args.feature_maps, input_shape, num_classes, batchn=args.batchn
-        )
+        with random_server_initialization_seed(args.seed):
+            server_model = server_model(
+                args.feature_maps, input_shape, num_classes, batchn=args.batchn
+            )
 
-        full_model_size = compute_payload_size_bytes(get_params(server_model,args.fedbn))
+            full_model_size = compute_payload_size_bytes(get_params(server_model,args.fedbn))
 
-        target_modules, modules_to_save,rank_pattern = gen_rank_pattern(server_model,r=args.lora_r,mode=args.lora_ablation_mode,ratio= args.loha_ratio)
-        
-        lora_config = LoraInfo(alpha=args.lora_alpha,
-                               r=args.lora_r,
-                               target_modules=target_modules,
-                               modules_to_save=modules_to_save,
-                               lora_type= args.strategy[3:],
-                               rank_pattern=rank_pattern)
+            target_modules, modules_to_save,rank_pattern = gen_rank_pattern(server_model,r=args.lora_r,mode=args.lora_ablation_mode,ratio= args.loha_ratio)
 
-        if args.from_pretrained:
-            try:
-                server_model= load_pretrained(server_model,args.model)
-            except:
-                pass
+            lora_config = LoraInfo(alpha=args.lora_alpha,
+                                   r=args.lora_r,
+                                   target_modules=target_modules,
+                                   modules_to_save=modules_to_save,
+                                   lora_type= args.strategy[3:],
+                                   rank_pattern=rank_pattern)
 
-        server_model = inject_low_rank(server_model,lora_config)
+            if args.from_pretrained:
+                try:
+                    server_model= load_pretrained(server_model,args.model)
+                except:
+                    pass
+
+            server_model = inject_low_rank(server_model,lora_config)
 
         _trainable,_total = server_model.get_nb_trainable_parameters()
         total_nb_params = _total
@@ -248,9 +276,10 @@ if __name__ == "__main__":
     elif args.strategy == "fedprox":
         from strategies import FedProx
 
-        server_model = server_model(
-            args.feature_maps, input_shape, num_classes, batchn=args.batchn
-        )
+        with random_server_initialization_seed(args.seed):
+            server_model = server_model(
+                args.feature_maps, input_shape, num_classes, batchn=args.batchn
+            )
 
         kwargs_dict["initial_parameters"] = get_tensor_parameters(server_model,args.fedbn)
         kwargs_dict["evaluate_fn"] = get_evaluate_fn(server_model, test_set, device, args)
