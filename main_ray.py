@@ -144,6 +144,9 @@ if __name__ == "__main__":
         "on_fit_config_fn": fit_config,
         "on_evaluate_config_fn": eval_config,
         "evaluate_fn": None,
+        # Keep aggregating rounds when some sampled clients fail or time out,
+        # as long as at least one fit result is returned.
+        "accept_failures": True,
         "drop_random": args.drop_random,
         "fedbn": args.fedbn,
         "dataset_name": args.dataset,
