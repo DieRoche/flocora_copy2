@@ -111,6 +111,8 @@ def aggregate_client_metrics(
         aggregate_client_metrics._running_total_flops = 0.0  # type: ignore[attr-defined]
     if not hasattr(aggregate_client_metrics, "_running_total_flops_compression"):
         aggregate_client_metrics._running_total_flops_compression = 0.0  # type: ignore[attr-defined]
+    if not hasattr(aggregate_client_metrics, "_running_recurring_flocora_tcc"):
+        aggregate_client_metrics._running_recurring_flocora_tcc = 0.0  # type: ignore[attr-defined]
     allowed_metric_keys = {
         "upload_sparsity",
         "download_sparsity",
@@ -123,7 +125,7 @@ def aggregate_client_metrics(
         "download_traffic",
         "upload_traffic_per_client",
         "download_traffic_per_client",
-        "num_fit_results",
+        "num_returned_results",
         "distributed_test_accuracy",
         "distributed_loss",
         "flops_by_epoch",
@@ -159,7 +161,32 @@ def aggregate_client_metrics(
             totals[key] += numeric_value
             counts[key] += 1
 
-    training_flops_round_clients = float(totals.get("flops_by_epoch", 0.0))
+    num_returned_results = sum(1 for _, client_metrics in metrics if isinstance(client_metrics, Mapping))
+    try:
+        runtime_args = args_module.get_args()
+    except RuntimeError:
+        runtime_args = None
+
+    expected_fit_clients = num_returned_results
+    if runtime_args is not None:
+        expected_fit_clients = max(
+            1,
+            int(
+                getattr(runtime_args, "num_clients", 0)
+                * getattr(runtime_args, "samp_rate", 0.0)
+            ),
+        )
+
+    ideal_scale = (
+        float(expected_fit_clients) / float(num_returned_results)
+        if num_returned_results > 0
+        else 0.0
+    )
+
+    def ideal_total(key: str, default: float = 0.0) -> float:
+        return float(totals.get(key, default)) * ideal_scale
+
+    training_flops_round_clients = ideal_total("flops_by_epoch")
     aggregation_flops_round_server = float(totals.get("aggregation_flops_round_server", 0.0))
     update_flops_round_server = float(totals.get("update_flops_round_server", 0.0))
     evaluation_flops_round = float(totals.get("evaluation_flops_round", 0.0))
@@ -170,21 +197,15 @@ def aggregate_client_metrics(
         + evaluation_flops_round
     )
 
-    serialization_flops_round_clients = float(totals.get("serialization_flops_round_clients", 0.0))
+    serialization_flops_round_clients = ideal_total("serialization_flops_round_clients")
     serialization_flops_round_server = float(totals.get("serialization_flops_round_server", 0.0))
-    deserialization_flops_round_clients = float(totals.get("deserialization_flops_round_clients", 0.0))
+    deserialization_flops_round_clients = ideal_total("deserialization_flops_round_clients")
     deserialization_flops_round_server = float(totals.get("deserialization_flops_round_server", 0.0))
-    compression_flops_round_clients = float(
-        totals.get("compression_flops_round_clients", totals.get("flops_compression", 0.0))
-    )
+    compression_flops_round_clients = ideal_total("compression_flops_round_clients", totals.get("flops_compression", 0.0))
     compression_flops_round_server = float(totals.get("compression_flops_round_server", 0.0))
-    decompression_flops_round_clients = float(
-        totals.get("decompression_flops_round_clients", totals.get("flops_decompression", 0.0))
-    )
+    decompression_flops_round_clients = ideal_total("decompression_flops_round_clients", totals.get("flops_decompression", 0.0))
     decompression_flops_round_server = float(totals.get("decompression_flops_round_server", 0.0))
-    intermediate_comm_flops_round_clients = float(
-        totals.get("intermediate_communication_processing_flops_round_clients", 0.0)
-    )
+    intermediate_comm_flops_round_clients = ideal_total("intermediate_communication_processing_flops_round_clients")
     intermediate_comm_flops_round_server = float(
         totals.get("intermediate_communication_processing_flops_round_server", 0.0)
     )
@@ -235,9 +256,7 @@ def aggregate_client_metrics(
     aggregated["intermediate_communication_processing_flops_round_server"] = (
         intermediate_comm_flops_round_server
     )
-    aggregated["communication_lora_size_round_clients"] = float(
-        totals.get("communication_lora_size_round_clients", 0.0)
-    )
+    aggregated["communication_lora_size_round_clients"] = ideal_total("communication_lora_size_round_clients")
 
     mean_keys = {
         "upload_sparsity",
@@ -265,21 +284,36 @@ def aggregate_client_metrics(
 
     for key in sum_keys:
         if counts.get(key, 0) > 0:
-            aggregated[key] = float(totals[key])
+            aggregated[key] = ideal_total(key)
 
-    upload_traffic = float(totals.get("upload_traffic", 0.0))
-    download_traffic = float(totals.get("download_traffic", 0.0))
-    num_fit_results = sum(1 for _, client_metrics in metrics if isinstance(client_metrics, Mapping))
-    aggregated["num_fit_results"] = float(num_fit_results)
+    upload_traffic = ideal_total("upload_traffic")
+    download_traffic = ideal_total("download_traffic")
+    aggregated["num_returned_results"] = float(num_returned_results)
+
     aggregated["upload_traffic"] = upload_traffic
     aggregated["download_traffic"] = download_traffic
     aggregated["overall_traffic"] = upload_traffic + download_traffic
-    if num_fit_results > 0:
-        aggregated["upload_traffic_per_client"] = upload_traffic / float(num_fit_results)
-        aggregated["download_traffic_per_client"] = download_traffic / float(num_fit_results)
+    if expected_fit_clients > 0:
+        aggregated["upload_traffic_per_client"] = upload_traffic / float(expected_fit_clients)
+        aggregated["download_traffic_per_client"] = download_traffic / float(expected_fit_clients)
     else:
         aggregated["upload_traffic_per_client"] = 0.0
         aggregated["download_traffic_per_client"] = 0.0
+
+    if runtime_args is not None and str(getattr(runtime_args, "strategy", "")).lower() in {
+        "fedlora",
+        "fedloha",
+    }:
+        round_recurring_tcc = float(upload_traffic + download_traffic)
+        aggregate_client_metrics._running_recurring_flocora_tcc += round_recurring_tcc  # type: ignore[attr-defined]
+        initial_w_cost = float(getattr(runtime_args, "initial_w_cost", 0.0))
+        aggregated["recurring_FLoCoRA_TCC"] = float(
+            aggregate_client_metrics._running_recurring_flocora_tcc  # type: ignore[attr-defined]
+        )
+        aggregated["total_FLoCoRA_TCC"] = float(
+            initial_w_cost
+            + aggregate_client_metrics._running_recurring_flocora_tcc  # type: ignore[attr-defined]
+        )
 
     return aggregated
 
@@ -421,13 +455,15 @@ def estimate_lora_projection_flops_from_payload(
 
 def estimate_fedavg_aggregation_and_update_flops(
     client_payloads: Sequence[Sequence[np.ndarray]],
+    num_clients: Optional[int] = None,
 ) -> Tuple[float, float]:
     """Estimate server aggregation/update FLOPs for elementwise weighted averaging."""
 
     if not client_payloads:
         return 0.0, 0.0
 
-    num_clients = len(client_payloads)
+    if num_clients is None:
+        num_clients = len(client_payloads)
     first_payload = client_payloads[0]
     aggregation_flops = 0.0
     update_flops = 0.0
@@ -482,7 +518,7 @@ def _persist_round_metrics_log(runtime_args: Namespace, payload: Mapping[str, fl
         "recurring_FLoCoRA_TCC",
         "total_FLoCoRA_TCC",
         "total_clients",
-        "num_fit_results",
+        "num_returned_results",
     ]
     output_path = _round_metrics_output_path(runtime_args)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -645,7 +681,7 @@ def maybe_log_to_wandb(metrics: Mapping[str, float], *, step: Optional[int] = No
             "recurring_FLoCoRA_TCC",
             "total_FLoCoRA_TCC",
             "total_clients",
-            "num_fit_results",
+            "num_returned_results",
         ):
             if key in round_state:
                 log_payload[key] = round_state[key]

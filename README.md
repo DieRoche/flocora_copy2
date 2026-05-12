@@ -239,18 +239,18 @@ In traffic builder logic for FLoCoRA/FedLoRA round 0:
 - `initial_w_traffic = download_traffic`
 - `overall_traffic = initial_w_traffic`
 
-For recurring rounds, client fit metrics provide:
+For recurring rounds, client fit metrics report ideal sampled-client accounting:
 
 - `upload_traffic = size(A + B + norm + FC) * sampled_clients`
 - `download_traffic = size(A + B + norm + FC) * sampled_clients`
 - `overall_traffic = upload_traffic + download_traffic`
 
-The run summary also records `recurring_FLoCoRA_TCC = 2 * num_rounds * sampled_clients * size(A + B + norm + FC)` and `total_FLoCoRA_TCC = initial_W_cost + recurring_FLoCoRA_TCC`.
+`TCC` means Total Communication Cost. The run summary records `recurring_FLoCoRA_TCC` with the same ideal sampled-client accounting, plus `total_FLoCoRA_TCC = initial_W_cost + recurring_FLoCoRA_TCC`. `num_returned_results` remains available to show how many clients actually returned a valid fit result.
 
 ### Validation
 
 - The round-0 frozen-base-model cost is one-time and total-client based.
-- Recurring traffic is sampled-client and round based.
+- Recurring traffic is based on the ideal `samp_rate` schedule; `num_returned_results` indicates how many sampled clients actually returned.
 - Traffic is estimated from ndarray size/model-size accounting, not measured from true transmitted payload encoding.
 
 ---

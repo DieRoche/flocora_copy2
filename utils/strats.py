@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 
 from log import logger, HFILE
-from utils.lora import extract_AB_matrix, set_lora_params
+from utils.lora import extract_AB_matrix, get_lora_state_items, set_lora_params
 from utils.utils import test, save_model, set_params, maybe_log_to_wandb
 
 
@@ -197,10 +197,11 @@ def _build_traffic_metrics(
 
     total_clients = _resolve_total_clients(args)
     download_traffic = download_traffic_per_client * total_clients
-    recurring_flocora_tcc = _ensure_float(getattr(args, "recurring_flocora_tcc", 0.0))
-    total_flocora_tcc = _ensure_float(
-        getattr(args, "total_flocora_tcc", download_traffic + recurring_flocora_tcc)
-    )
+    # At round 0 only the initialization broadcast has actually happened.
+    # Recurring LoRA traffic is accumulated later from fit results that return
+    # and are passed into the metrics aggregation function.
+    recurring_flocora_tcc = 0.0
+    total_flocora_tcc = download_traffic
 
     return {
         "upload_traffic": 0.0,
@@ -271,12 +272,21 @@ class EvaluateLora:
         self.device = device
         self.past_a_matrix, self.past_b_matrix = extract_AB_matrix(model.state_dict())
 
+    def _set_lora_or_full_params(self, parameters) -> None:
+        expected_lora_tensors = len(get_lora_state_items(self.model))
+        received_tensors = len(parameters) if parameters is not None else 0
+        if received_tensors == expected_lora_tensors:
+            set_lora_params(self.model, parameters)
+        else:
+            # If a fit round returns no aggregate (for example, all sampled
+            # clients failed due to GPU pressure), Flower keeps the previous
+            # server parameters. For the initial LoRA state this payload is the
+            # full PEFT model, not just the adapter tensors, even on round > 0.
+            set_params(self.model, parameters, self.args.fedbn)
+
     def __call__(self, server_round, parameters, config):
         if self.args.strategy in {"fedlora", "fedloha"}:
-            if server_round == 0:
-                set_params(self.model, parameters, self.args.fedbn)
-            else:
-                set_lora_params(self.model, parameters)
+            self._set_lora_or_full_params(parameters)
         else:
             set_params(self.model, parameters, self.args.fedbn)
         to_log = {}

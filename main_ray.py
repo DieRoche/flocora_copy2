@@ -144,6 +144,9 @@ if __name__ == "__main__":
         "on_fit_config_fn": fit_config,
         "on_evaluate_config_fn": eval_config,
         "evaluate_fn": None,
+        # Keep aggregating rounds when some sampled clients fail or time out,
+        # as long as at least one fit result is returned.
+        "accept_failures": True,
         "drop_random": args.drop_random,
         "fedbn": args.fedbn,
         "dataset_name": args.dataset,
@@ -151,6 +154,7 @@ if __name__ == "__main__":
 
     aggregate_client_metrics._running_total_flops = 0.0  # type: ignore[attr-defined]
     aggregate_client_metrics._running_total_flops_compression = 0.0  # type: ignore[attr-defined]
+    aggregate_client_metrics._running_recurring_flocora_tcc = 0.0  # type: ignore[attr-defined]
     maybe_log_to_wandb._round_cache = {}  # type: ignore[attr-defined]
     maybe_log_to_wandb._running_total_flops = 0.0  # type: ignore[attr-defined]
     maybe_log_to_wandb._running_total_flops_compression = 0.0  # type: ignore[attr-defined]
@@ -230,8 +234,11 @@ if __name__ == "__main__":
         flocora_payload_size = compute_payload_size_bytes(initial_lora_params)
         model_size = flocora_payload_size
         initial_w_cost = float(full_model_size * pool_size)
-        recurring_flocora_tcc = float(2.0 * args.num_rounds * sampled_clients * flocora_payload_size)
-        total_flocora_tcc = float(initial_w_cost + recurring_flocora_tcc)
+        # Runtime recurring traffic is accumulated later from clients that
+        # actually return and are aggregated, so failed/dropped clients do not
+        # inflate communication totals.
+        recurring_flocora_tcc = 0.0
+        total_flocora_tcc = float(initial_w_cost)
         args.initial_w_size_bytes = float(full_model_size)
         args.flocora_payload_size_bytes = float(flocora_payload_size)
         args.initial_w_cost = initial_w_cost
@@ -360,6 +367,10 @@ if __name__ == "__main__":
         strategy=strategy,
         ray_init_args=ray_init_args,
     )
+    actual_recurring_flocora_tcc = float(
+        getattr(aggregate_client_metrics, "_running_recurring_flocora_tcc", recurring_flocora_tcc)
+    )
+    actual_total_flocora_tcc = float(initial_w_cost + actual_recurring_flocora_tcc)
     report_metadata = {
         "model_size_bytes": model_size if model_size > 0 else 0.0,
         "full_model_size_bytes": float(full_model_size),
@@ -368,8 +379,8 @@ if __name__ == "__main__":
         "clients_per_round": float(clients_per_round),
         "num_rounds": float(args.num_rounds),
         "initial_W_cost": float(initial_w_cost),
-        "recurring_FLoCoRA_TCC": float(recurring_flocora_tcc),
-        "total_FLoCoRA_TCC": float(total_flocora_tcc),
+        "recurring_FLoCoRA_TCC": float(actual_recurring_flocora_tcc),
+        "total_FLoCoRA_TCC": float(actual_total_flocora_tcc),
     }
     tell_history(
         hist,
