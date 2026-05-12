@@ -62,8 +62,7 @@ def create_parser():
     parser.add_argument(
         "--no_thread",
         action="store_true",
-        default=False,
-        help="launch client fit/eval in the current process",
+        help="to launch the fit/eval in the current thread",
     )
     parser.add_argument("--file_name", type=str,default="",help="experience's name (optional)")
     parser.add_argument("--skip_gen_training", action="store_true",help="to skip training pt data")
