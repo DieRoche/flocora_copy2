@@ -197,10 +197,11 @@ def _build_traffic_metrics(
 
     total_clients = _resolve_total_clients(args)
     download_traffic = download_traffic_per_client * total_clients
-    recurring_flocora_tcc = _ensure_float(getattr(args, "recurring_flocora_tcc", 0.0))
-    total_flocora_tcc = _ensure_float(
-        getattr(args, "total_flocora_tcc", download_traffic + recurring_flocora_tcc)
-    )
+    # At round 0 only the initialization broadcast has actually happened.
+    # Recurring LoRA traffic is accumulated later from fit results that return
+    # and are passed into the metrics aggregation function.
+    recurring_flocora_tcc = 0.0
+    total_flocora_tcc = download_traffic
 
     return {
         "upload_traffic": 0.0,

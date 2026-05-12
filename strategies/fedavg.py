@@ -241,43 +241,56 @@ class FedAvg(Strategy):
             return None, {}
 
         if(self.drop_random):
+            accepted_results = []
             weights_results = []
             random_guess = get_random_guess_perf(self.dataset_name)
             # Convert results
-            for _,fit_res in results:
+            for client_proxy, fit_res in results:
                 _,res = self.evaluate_fn(-1,parameters_to_ndarrays(fit_res.parameters),{})
                 if res["accuracy"] > random_guess:
+                    accepted_results.append((client_proxy, fit_res))
                     weights_results.append([parameters_to_ndarrays(fit_res.parameters), fit_res.num_examples])
         else:
+            accepted_results = list(results)
             weights_results = [
                 (parameters_to_ndarrays(fit_res.parameters), fit_res.num_examples)
                 for _, fit_res in results
             ]
 
+        if not weights_results:
+            metrics_aggregated = {}
+            if self.fit_metrics_aggregation_fn:
+                fit_metrics = [(res.num_examples, res.metrics) for _, res in results]
+                metrics_aggregated = self.fit_metrics_aggregation_fn(fit_metrics)
+                metrics_aggregated["num_returned_results"] = float(len(results))
+                if metrics_aggregated:
+                    maybe_log_to_wandb(metrics_aggregated, step=server_round)
+            return None, metrics_aggregated
+
         parameters_aggregated = ndarrays_to_parameters(aggregate(weights_results))
         aggregated_ndarrays = parameters_to_ndarrays(parameters_aggregated)
         client_payloads = [parameters_to_ndarrays(fit_res.parameters) for _, fit_res in results]
-        aggregation_flops, update_flops = estimate_fedavg_aggregation_and_update_flops(client_payloads)
-        serialization_flops_server = estimate_serialization_flops(aggregated_ndarrays)
-        deserialization_flops_server = float(
-            sum(estimate_deserialization_flops(payload) for payload in client_payloads)
+        ideal_num_clients = max(1, int(getattr(self, "min_fit_clients", len(results))))
+        aggregation_flops, update_flops = estimate_fedavg_aggregation_and_update_flops(
+            client_payloads,
+            num_clients=ideal_num_clients,
         )
+        serialization_flops_server = estimate_serialization_flops(aggregated_ndarrays)
+        if client_payloads:
+            deserialization_flops_server = float(
+                sum(estimate_deserialization_flops(payload) for payload in client_payloads)
+                / float(len(client_payloads))
+                * float(ideal_num_clients)
+            )
+        else:
+            deserialization_flops_server = 0.0
 
         # Aggregate custom metrics if aggregation fn was provided
         metrics_aggregated = {}
         if self.fit_metrics_aggregation_fn:
             fit_metrics = [(res.num_examples, res.metrics) for _, res in results]
             metrics_aggregated = self.fit_metrics_aggregation_fn(fit_metrics)
-            num_fit_results = len(results)
-            metrics_aggregated["num_fit_results"] = float(num_fit_results)
-            upload_traffic = float(metrics_aggregated.get("upload_traffic", 0.0))
-            download_traffic = float(metrics_aggregated.get("download_traffic", 0.0))
-            if num_fit_results > 0:
-                metrics_aggregated["upload_traffic_per_client"] = upload_traffic / float(num_fit_results)
-                metrics_aggregated["download_traffic_per_client"] = download_traffic / float(num_fit_results)
-            else:
-                metrics_aggregated["upload_traffic_per_client"] = 0.0
-                metrics_aggregated["download_traffic_per_client"] = 0.0
+            metrics_aggregated["num_returned_results"] = float(len(results))
             metrics_aggregated["aggregation_flops_round_server"] = float(aggregation_flops)
             metrics_aggregated["update_flops_round_server"] = float(update_flops)
             metrics_aggregated["serialization_flops_round_server"] = float(serialization_flops_server)
