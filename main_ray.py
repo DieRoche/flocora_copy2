@@ -329,7 +329,7 @@ if __name__ == "__main__":
             strategy=args.strategy,
             lora_config = lora_config,
             seed=args.seed,
-            nworkers=args.nworkers,
+            nworkers=effective_nworkers,
             apply_quant=args.apply_quant,
             quant_bits=args.quant_bits,
         )
@@ -381,6 +381,16 @@ if __name__ == "__main__":
         per_client_gpus = min(per_client_gpus, float(total_gpus))
 
     client_resources = {"num_cpus": per_client_cpus, "num_gpus": per_client_gpus}
+    effective_nworkers = min(args.nworkers, max(0, int(per_client_cpus)))
+    if effective_nworkers != args.nworkers:
+        logger.info(
+            "Adjusted dataloader workers per client from %s to %s to match the "
+            "resolved per-client CPU reservation (%s).",
+            args.nworkers,
+            effective_nworkers,
+            per_client_cpus,
+        )
+
     logger.info(
         "Ray resource values: total_cpus=%s, per_client_cpus=%s, "
         "total_gpus=%s, per_client_gpus=%s, client_resources=%s, "
@@ -468,6 +478,7 @@ if __name__ == "__main__":
         "total_gpus": float(total_gpus),
         "per_client_gpus": float(per_client_gpus),
         "connects_to_existing_ray": float(connects_to_existing_ray),
+        "dataloader_workers_per_client": float(effective_nworkers),
         "num_rounds": float(args.num_rounds),
         "initial_W_cost": float(initial_w_cost),
         "recurring_FLoCoRA_TCC": float(actual_recurring_flocora_tcc),
