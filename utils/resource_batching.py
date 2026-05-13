@@ -38,7 +38,12 @@ def _capacity_for_resource(
         return None
     if total_resource <= 0.0:
         return 0
-    return int(floor(total_resource / per_client_resource))
+
+    # Fractional Ray resources (for example 14 CPUs / 50 clients = 0.28 CPU
+    # per client) can produce ratios like 49.999999999 due to floating point
+    # representation.  Add a small tolerance before flooring so exact SLURM
+    # splits are not under-counted by one client.
+    return int(floor((total_resource / per_client_resource) + 1e-9))
 
 
 def plan_client_batches(

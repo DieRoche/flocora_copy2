@@ -171,7 +171,11 @@ def _postprocess_args(parsed_args: argparse.Namespace) -> argparse.Namespace:
     if slurm_cpus is not None and parsed_args.ray_cpu == 1.0:
         try:
             cpus = max(1, int(slurm_cpus))
-            parsed_args.ray_cpu = max(1.0, float(cpus) / float(min_fit_clients))
+            # Ray supports fractional CPU reservations.  Divide the SLURM CPU
+            # allocation across the sampled clients, not across all clients, so
+            # rounds with high sampling rates can still place all sampled
+            # clients when resources are sufficient.
+            parsed_args.ray_cpu = max(1e-6, float(cpus) / float(min_fit_clients))
         except ValueError:
             pass
 
