@@ -1,8 +1,10 @@
 import argparse
-import numpy as np
-from typing import Iterable, Optional
-from pathlib import Path
+from datetime import datetime
 import os
+from pathlib import Path
+from typing import Iterable, Optional
+
+import numpy as np
 
 _CACHED_ARGS: Optional[argparse.Namespace] = None
 
@@ -67,7 +69,12 @@ def create_parser():
     parser.add_argument("--file_name", type=str,default="",help="experience's name (optional)")
     parser.add_argument("--skip_gen_training", action="store_true",help="to skip training pt data")
     parser.add_argument("--checkpoint", action="store_true",help="secretly bad")
-    parser.add_argument("--seed", type=int,default=5,help="reduction for the learning rate")
+    parser.add_argument("--seed", type=int,default=5,help="seed used for random number generators")
+    parser.add_argument(
+        "--time_seed",
+        action="store_true",
+        help="derive the final seed from the run time as round((minute / hour) * seed)",
+    )
     parser.add_argument("--freq_checkpoint", type=int,default=9999999,help="reduction for the learning rate")
     parser.add_argument("--nworkers", type=int,default=5,help="num workers dataloader")
     parser.add_argument(
@@ -109,6 +116,20 @@ def create_parser():
     parser.add_argument("--mu", type=float,default=0.01,help="fedprox proximal factor")
     return parser
 
+def derive_time_seed(seed: int, run_time: Optional[datetime] = None) -> int:
+    """Derive a seed from the current clock time and the provided base seed.
+
+    The formula follows the ablation convention requested for time-varied runs:
+    ``round((minute / hour) * seed)``.  For example, at 18:30 with ``--seed 5``,
+    the derived seed is ``round((30 / 18) * 5) == 8``.  Midnight uses hour 24
+    to avoid division by zero while still producing a time-dependent seed.
+    """
+
+    current_time = run_time or datetime.now()
+    hour = current_time.hour or 24
+    return int(round((current_time.minute / hour) * seed))
+
+
 def _postprocess_args(parsed_args: argparse.Namespace) -> argparse.Namespace:
     Path(parsed_args.path_results).mkdir(parents=True, exist_ok=True)
 
@@ -122,6 +143,9 @@ def _postprocess_args(parsed_args: argparse.Namespace) -> argparse.Namespace:
 
     if parsed_args.path_results[-1] != "/":
         parsed_args.path_results += "/"
+
+    if parsed_args.time_seed:
+        parsed_args.seed = derive_time_seed(parsed_args.seed)
 
     # On SLURM clusters, automatically align Ray resources with scheduler
     # allocations when CLI values were not explicitly overridden.
