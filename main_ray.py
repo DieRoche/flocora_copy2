@@ -1,4 +1,5 @@
 import multiprocessing
+import os
 import random
 from argparse import Namespace
 from typing import Optional
@@ -17,6 +18,7 @@ from utils.dataset import import_dataset, do_fl_partitioning
 from utils.utils import *
 from utils.file_name import gen_filename, gen_run_name
 from utils.server import *
+from utils.resource_batching import plan_client_batches
 from log import logger, HFILE
 from utils.strats import Evaluate, EvaluateLora, get_evaluate_fn
 from utils.simple_quant import original_msg_size
@@ -313,7 +315,14 @@ if __name__ == "__main__":
 
     # (optional) specify Ray config
     ray_init_args = {"include_dashboard": False}
-    total_cpus = max(1, multiprocessing.cpu_count())
+    system_cpus = max(1, multiprocessing.cpu_count())
+    try:
+        total_cpus = max(1, int(os.environ.get("SLURM_CPUS_PER_TASK", system_cpus)))
+    except ValueError:
+        total_cpus = system_cpus
+    total_cpus = min(total_cpus, system_cpus)
+    ray_init_args["num_cpus"] = total_cpus
+
     per_client_cpus = max(0.0, float(args.ray_cpu))
     if per_client_cpus == 0.0:
         logger.warning(
@@ -323,19 +332,59 @@ if __name__ == "__main__":
         per_client_cpus = 1.0
     per_client_cpus = min(per_client_cpus, float(total_cpus))
     visible_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    try:
+        slurm_gpus = float(os.environ.get("SLURM_GPUS_ON_NODE", visible_gpus))
+    except ValueError:
+        slurm_gpus = float(visible_gpus)
+    total_gpus = min(float(visible_gpus), max(0.0, slurm_gpus))
+    if total_gpus > 0.0:
+        ray_init_args["num_gpus"] = total_gpus
 
-    if args.only_cpu or visible_gpus == 0:
+    if args.only_cpu or total_gpus == 0.0:
         per_client_gpus = 0.0
     else:
         if args.ray_gpu is None:
-            per_client_gpus = float(visible_gpus)
+            per_client_gpus = float(total_gpus)
         else:
             per_client_gpus = max(0.0, float(args.ray_gpu))
-        per_client_gpus = min(per_client_gpus, float(visible_gpus))
+        per_client_gpus = min(per_client_gpus, float(total_gpus))
 
     client_resources = {"num_cpus": per_client_cpus, "num_gpus": per_client_gpus}
+    logger.info(
+        "Ray resource values: total_cpus=%s, per_client_cpus=%s, "
+        "total_gpus=%s, per_client_gpus=%s, client_resources=%s",
+        total_cpus,
+        per_client_cpus,
+        total_gpus,
+        per_client_gpus,
+        client_resources,
+    )
 
-    logger.debug(f"Client resources resolved to: {client_resources}")
+    batch_plan = plan_client_batches(
+        sampled_clients,
+        total_cpus=float(total_cpus),
+        per_client_cpus=per_client_cpus,
+        total_gpus=float(total_gpus),
+        per_client_gpus=per_client_gpus,
+    )
+    if batch_plan.uses_serial_batches:
+        logger.warning(
+            "Sampled clients cannot all be placed in one Ray resource batch. "
+            "Using parallel+serial execution: %s sampled clients will run in %s "
+            "batch(es) of up to %s client(s), with at most %s client(s) placeable "
+            "concurrently for resources %s.",
+            batch_plan.requested_clients,
+            batch_plan.num_batches,
+            batch_plan.batch_size,
+            batch_plan.max_parallel_clients,
+            client_resources,
+        )
+    else:
+        logger.debug(
+            "Client resources resolved to %s; all %s sampled client(s) fit in one batch.",
+            client_resources,
+            batch_plan.requested_clients,
+        )
 
     if args.wandb:
         import wandb
@@ -377,6 +426,13 @@ if __name__ == "__main__":
         "flocora_payload_size_bytes": float(flocora_payload_size),
         "total_clients": float(pool_size),
         "clients_per_round": float(clients_per_round),
+        "client_batch_size": float(batch_plan.batch_size),
+        "client_batches_per_round": float(batch_plan.num_batches),
+        "max_parallel_clients": float(batch_plan.max_parallel_clients),
+        "total_cpus": float(total_cpus),
+        "per_client_cpus": float(per_client_cpus),
+        "total_gpus": float(total_gpus),
+        "per_client_gpus": float(per_client_gpus),
         "num_rounds": float(args.num_rounds),
         "initial_W_cost": float(initial_w_cost),
         "recurring_FLoCoRA_TCC": float(actual_recurring_flocora_tcc),

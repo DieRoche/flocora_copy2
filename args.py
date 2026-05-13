@@ -117,17 +117,30 @@ def create_parser():
     return parser
 
 def derive_time_seed(seed: int, run_time: Optional[datetime] = None) -> int:
-    """Derive a seed from the current clock time and the provided base seed.
+    """Derive a valid RNG seed from the clock time and base seed.
 
-    The formula follows the ablation convention requested for time-varied runs:
-    ``round((minute / hour) * seed)``.  For example, at 18:30 with ``--seed 5``,
-    the derived seed is ``round((30 / 18) * 5) == 8``.  Midnight uses hour 24
-    to avoid division by zero while still producing a time-dependent seed.
+    The ablation formula is still ``round((minute / hour) * seed)``, but the
+    raw value can become ``0`` at minute zero or when the scaled seed rounds
+    down. Keep the formula whenever it already produces a usable value and
+    normalize only zero-valued results into a positive NumPy/PyTorch-compatible
+    seed. Midnight uses hour 24 to avoid division by zero while still producing
+    a time-dependent seed.
     """
 
     current_time = run_time or datetime.now()
     hour = current_time.hour or 24
-    return int(round((current_time.minute / hour) * seed))
+    raw_seed = int(round((current_time.minute / hour) * int(seed)))
+
+    max_seed = 2**32 - 1
+    normalized_seed = raw_seed % max_seed
+    if normalized_seed == 0:
+        normalized_seed = (
+            abs(int(seed)) + (current_time.hour * 60) + current_time.minute + 1
+        ) % max_seed
+        if normalized_seed == 0:
+            normalized_seed = 1
+
+    return normalized_seed
 
 
 def _postprocess_args(parsed_args: argparse.Namespace) -> argparse.Namespace:
