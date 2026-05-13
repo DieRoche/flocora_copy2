@@ -28,6 +28,29 @@ args: Optional[Namespace] = None
 client_lr: float = 0.0
 
 
+def _ray_current_cluster_file_exists() -> bool:
+    """Return whether Ray has recorded a latest local cluster address."""
+
+    current_cluster_path = Path("/tmp/ray/ray_current_cluster")
+    try:
+        return current_cluster_path.exists() and current_cluster_path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _ray_connects_to_existing_cluster(ray_init_args: dict) -> bool:
+    """Return whether Ray init should avoid local resource overrides."""
+
+    address = ray_init_args.get("address") or os.environ.get("RAY_ADDRESS")
+    if address is not None:
+        normalized_address = str(address).strip().lower()
+        if not normalized_address:
+            return False
+        return normalized_address != "local"
+
+    return _ray_current_cluster_file_exists()
+
+
 def _require_args() -> Namespace:
     if args is None:
         raise RuntimeError("Runtime arguments have not been initialized. Call parse_and_cache_args() first.")
@@ -321,7 +344,15 @@ if __name__ == "__main__":
     except ValueError:
         total_cpus = system_cpus
     total_cpus = min(total_cpus, system_cpus)
-    ray_init_args["num_cpus"] = total_cpus
+
+    connects_to_existing_ray = _ray_connects_to_existing_cluster(ray_init_args)
+    if connects_to_existing_ray:
+        logger.info(
+            "Ray will connect to an existing cluster; not setting num_cpus/num_gpus "
+            "in ray_init_args because Ray rejects resource overrides in connect-only mode."
+        )
+    else:
+        ray_init_args["num_cpus"] = total_cpus
 
     per_client_cpus = max(0.0, float(args.ray_cpu))
     if per_client_cpus == 0.0:
@@ -337,7 +368,7 @@ if __name__ == "__main__":
     except ValueError:
         slurm_gpus = float(visible_gpus)
     total_gpus = min(float(visible_gpus), max(0.0, slurm_gpus))
-    if total_gpus > 0.0:
+    if total_gpus > 0.0 and not connects_to_existing_ray:
         ray_init_args["num_gpus"] = total_gpus
 
     if args.only_cpu or total_gpus == 0.0:
@@ -352,12 +383,15 @@ if __name__ == "__main__":
     client_resources = {"num_cpus": per_client_cpus, "num_gpus": per_client_gpus}
     logger.info(
         "Ray resource values: total_cpus=%s, per_client_cpus=%s, "
-        "total_gpus=%s, per_client_gpus=%s, client_resources=%s",
+        "total_gpus=%s, per_client_gpus=%s, client_resources=%s, "
+        "connects_to_existing_ray=%s, ray_init_args=%s",
         total_cpus,
         per_client_cpus,
         total_gpus,
         per_client_gpus,
         client_resources,
+        connects_to_existing_ray,
+        ray_init_args,
     )
 
     batch_plan = plan_client_batches(
@@ -433,6 +467,7 @@ if __name__ == "__main__":
         "per_client_cpus": float(per_client_cpus),
         "total_gpus": float(total_gpus),
         "per_client_gpus": float(per_client_gpus),
+        "connects_to_existing_ray": float(connects_to_existing_ray),
         "num_rounds": float(args.num_rounds),
         "initial_W_cost": float(initial_w_cost),
         "recurring_FLoCoRA_TCC": float(actual_recurring_flocora_tcc),
