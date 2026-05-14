@@ -1,6 +1,7 @@
 import multiprocessing
 import os
 import random
+import secrets
 from argparse import Namespace
 from typing import Optional
 
@@ -84,6 +85,28 @@ def eval_config(server_round):
         "server_round": server_round,
     }
     return config
+
+def build_server_model(model_factory):
+    """Instantiate the server model with entropy independent of the experiment seed."""
+    runtime_args = _require_args()
+    python_rng_state = random.getstate()
+    numpy_rng_state = np.random.get_state()
+    try:
+        independent_seed = secrets.randbits(63)
+        with torch.random.fork_rng(devices=[]):
+            random.seed(independent_seed)
+            np.random.seed(independent_seed % (2**32))
+            torch.manual_seed(independent_seed)
+            return model_factory(
+                runtime_args.feature_maps,
+                input_shape,
+                num_classes,
+                batchn=runtime_args.batchn,
+            )
+    finally:
+        random.setstate(python_rng_state)
+        np.random.set_state(numpy_rng_state)
+
 
 def build_server_info(test_set,knn_set=None):
     runtime_args = _require_args()
@@ -203,9 +226,7 @@ if __name__ == "__main__":
     if args.strategy == "fedavg":
         from strategies.fedavg import FedAvg
 
-        server_model = server_model(
-            args.feature_maps, input_shape, num_classes, batchn=args.batchn
-        )
+        server_model = build_server_model(server_model)
         model_size = original_msg_size(server_model)
         full_model_size = model_size
         total_nb_params = model_size//4
@@ -228,9 +249,7 @@ if __name__ == "__main__":
     elif args.strategy == "fedlora" or  args.strategy == "fedloha":
         from strategies import FedLora
         from utils.lora import inject_low_rank
-        server_model = server_model(
-            args.feature_maps, input_shape, num_classes, batchn=args.batchn
-        )
+        server_model = build_server_model(server_model)
 
         full_model_size = compute_payload_size_bytes(get_params(server_model,args.fedbn))
 
@@ -280,9 +299,7 @@ if __name__ == "__main__":
     elif args.strategy == "fedprox":
         from strategies import FedProx
 
-        server_model = server_model(
-            args.feature_maps, input_shape, num_classes, batchn=args.batchn
-        )
+        server_model = build_server_model(server_model)
 
         kwargs_dict["initial_parameters"] = get_tensor_parameters(server_model,args.fedbn)
         kwargs_dict["evaluate_fn"] = get_evaluate_fn(server_model, test_set, device, args)
