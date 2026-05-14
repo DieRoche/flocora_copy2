@@ -146,8 +146,11 @@ class FedLora(FedAvg):
             )
         else:
             decompression_flops_server = 0.0
-        compression_flops_server = estimate_lora_projection_flops_from_payload(
-            aggregated_ndarrays, lora_state_keys
+        compression_flops_server = float(
+            estimate_lora_projection_flops_from_payload(
+                aggregated_ndarrays, lora_state_keys
+            )
+            * float(ideal_num_clients)
         )
 
         # Aggregate custom metrics if aggregation fn was provided
