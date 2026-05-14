@@ -294,9 +294,9 @@ def aggregate_client_metrics(
     aggregated["upload_traffic"] = upload_traffic
     aggregated["download_traffic"] = download_traffic
     aggregated["overall_traffic"] = upload_traffic + download_traffic
-    if expected_fit_clients > 0:
-        aggregated["upload_traffic_per_client"] = upload_traffic / float(expected_fit_clients)
-        aggregated["download_traffic_per_client"] = download_traffic / float(expected_fit_clients)
+    if active_fit_clients > 0:
+        aggregated["upload_traffic_per_client"] = upload_traffic / float(active_fit_clients)
+        aggregated["download_traffic_per_client"] = download_traffic / float(active_fit_clients)
     else:
         aggregated["upload_traffic_per_client"] = 0.0
         aggregated["download_traffic_per_client"] = 0.0
