@@ -16,6 +16,7 @@ from utils.utils import (
     compute_payload_size_bytes,
     estimate_serialization_flops,
     estimate_deserialization_flops,
+    estimate_lora_projection_flops_from_payload,
 )
 from utils.dataset import (
     get_dataloader,
@@ -294,6 +295,23 @@ def _estimate_lora_projection_flops(model: torch.nn.Module, lora_config) -> floa
     return float(total_flops)
 
 
+def _estimate_lora_payload_decompression_flops(
+    payload, model: torch.nn.Module, received_lora_payload: bool
+) -> float:
+    """Estimate client-side FLOPs for expanding an inbound LoRA payload.
+
+    Full-model downloads are already dense, so they do not require LoRA
+    projection/decompression. LoRA downloads vary with the payload layout and
+    rank pattern received by the client in that round.
+    """
+
+    if not received_lora_payload or payload is None:
+        return 0.0
+
+    state_keys = [name for name, _ in get_lora_state_items(model)]
+    return estimate_lora_projection_flops_from_payload(payload, state_keys)
+
+
 def _estimate_quantization_flops(model: torch.nn.Module) -> float:
     """Approximate per-round FLOPs spent on fake quantization and dequantization."""
 
@@ -553,7 +571,13 @@ def mp_fit(info, fl_info,config, parameters, return_dict):
         )
 
         compression_flops = float(lora_projection_flops + quantization_flops)
-        decompression_flops = float(lora_projection_flops + quantization_flops)
+        decompression_flops = float(
+            _estimate_lora_payload_decompression_flops(
+                parameters,
+                net,
+                received_lora_payload,
+            )
+        )
 
         epoch_flops_total = float(sum(epoch_flops)) if epoch_flops else 0.0
         if getattr(fl_info, "lora_config", None) is not None and lora_training_flops > 0.0:

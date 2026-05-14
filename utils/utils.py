@@ -166,18 +166,18 @@ def aggregate_client_metrics(
     except RuntimeError:
         runtime_args = None
 
-    expected_fit_clients = num_returned_results
+    active_fit_clients = num_returned_results
     if runtime_args is not None:
-        expected_fit_clients = max(
-            1,
-            int(
-                getattr(runtime_args, "num_clients", 0)
-                * getattr(runtime_args, "samp_rate", 0.0)
-            ),
-        )
+        configured_clients = int(getattr(runtime_args, "num_clients", 0) or 0)
+        sample_rate = float(getattr(runtime_args, "samp_rate", 0.0) or 0.0)
+        if configured_clients > 0 and sample_rate > 0.0:
+            active_fit_clients = max(1, int(configured_clients * sample_rate))
 
+    # Client-side FLOPs are measured on the clients that actually returned.  Keep
+    # the configured active-client count stable across rounds by scaling the
+    # returned sample average to the intended sample of the total client pool.
     ideal_scale = (
-        float(expected_fit_clients) / float(num_returned_results)
+        float(active_fit_clients) / float(num_returned_results)
         if num_returned_results > 0
         else 0.0
     )
@@ -237,6 +237,8 @@ def aggregate_client_metrics(
     aggregated["round_flops_compression"] = round_flops_compression
     aggregated["total_flops"] = float(running_total)
     aggregated["total_flops_compression"] = float(running_total_compression)
+    aggregated["active_fit_clients"] = float(active_fit_clients)
+    aggregated["client_metric_sample_size"] = float(num_returned_results)
     aggregated["round_training_flops_clients"] = training_flops_round_clients
     aggregated["aggregation_flops_round_server"] = aggregation_flops_round_server
     aggregated["update_flops_round_server"] = update_flops_round_server
